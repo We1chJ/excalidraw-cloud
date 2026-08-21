@@ -1,0 +1,20 @@
+node_modules/
+dist/
+
+# Excalidraw's fonts, copied from node_modules by the postinstall script.
+# ~1000 files and 14MB of subsetted woff2 -- regenerate with `npm run copy-assets`
+# rather than carrying them in history.
+public/excalidraw-assets/
+.env
+.env.local
+
+# Private signing key for the pinned extension ID. NEVER commit this.
+# The matching PUBLIC key lives in manifest.config.ts and is safe to share.
+key.pem
+
+# Derived artifacts
+.extension-key.txt
+.extension-id.txt
+
+*.log
+.DS_Store

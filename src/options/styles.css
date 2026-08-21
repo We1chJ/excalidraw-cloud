@@ -1,0 +1,166 @@
+:root {
+  --bg: #ffffff;
+  --card: #f8f9fa;
+  --border: #e4e5e9;
+  --text: #1b1b1f;
+  --text-muted: #6b6b76;
+  --accent: #6965db;
+  --ok: #2f9e44;
+  --pending: #e8590c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121212;
+    --card: #1a1a1d;
+    --border: #2c2c31;
+    --text: #e3e3e8;
+    --text-muted: #9a9aa5;
+    --accent: #a8a5ff;
+    --ok: #69db7c;
+    --pending: #ffa94d;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.page {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 48px 24px 64px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.lede {
+  margin: 0 0 32px;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.card p {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.card p:last-child {
+  margin-bottom: 0;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+.facts dt {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.facts dd {
+  margin: 2px 0 0;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.status {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.status-ready {
+  color: var(--ok);
+}
+
+.status-pending {
+  color: var(--pending);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.mono,
+code {
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+code {
+  background: rgba(128, 128, 128, 0.15);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.ext-id {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.ext-id-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.ext-id-row code {
+  flex: 1;
+}
+
+.btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.footnote {
+  font-size: 13px;
+  color: var(--text-muted);
+}
