@@ -11,11 +11,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
-const built = await readFile(path.join(root, 'dist/src/editor/index.html'), 'utf8');
-
-const script = built.match(/<script type="module"[^>]*src="([^"]+)"/)?.[1];
-const style = built.match(/<link rel="stylesheet"[^>]*href="([^"]+)"/)?.[1];
-if (!script) throw new Error('Could not find the editor entry script in the built HTML.');
+async function entryOf(page) {
+  const built = await readFile(path.join(root, `dist/src/${page}/index.html`), 'utf8');
+  const script = built.match(/<script type="module"[^>]*src="([^"]+)"/)?.[1];
+  const style = built.match(/<link rel="stylesheet"[^>]*href="([^"]+)"/)?.[1];
+  if (!script) throw new Error(`Could not find the ${page} entry script in the built HTML.`);
+  return { script, style };
+}
 
 const shim = `
   // chrome.storage.local is persisted to localStorage so that reloading the
@@ -53,7 +55,7 @@ const shim = `
       id: 'harness-not-a-real-extension',
       getURL: (p) => new URL('/' + String(p).replace(/^\\/+/, ''), location.origin).toString(),
       getManifest: () => ({ manifest_version: 3, name: 'Excalidraw Cloud (harness)', version: '0.0.0' }),
-      openOptionsPage: () => window.open('/src/options/index.html', '_blank'),
+      openOptionsPage: () => window.open('/harness-options.html', '_blank'),
     },
     storage: {
       local: area('local'),
@@ -73,21 +75,29 @@ const shim = `
   window.addEventListener('unhandledrejection', (e) => console.error('[HARNESS] rejection:', e.reason?.message ?? e.reason));
 `;
 
-const html = `<!doctype html>
+function page(title, entry) {
+  return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Excalidraw Cloud — harness</title>
+    <title>${title}</title>
     <script>${shim}</script>
-${style ? `    <link rel="stylesheet" crossorigin href="${style}">` : ''}
-    <script type="module" crossorigin src="${script}"></script>
+${entry.style ? `    <link rel="stylesheet" crossorigin href="${entry.style}">` : ''}
+    <script type="module" crossorigin src="${entry.script}"></script>
   </head>
   <body>
     <div id="root"></div>
   </body>
 </html>
 `;
+}
 
-await writeFile(path.join(root, 'dist/harness.html'), html);
-console.log('[make-harness] dist/harness.html -> ' + script);
+for (const [name, title, out] of [
+  ['editor', 'Excalidraw Cloud — harness', 'harness.html'],
+  ['options', 'Excalidraw Cloud — settings harness', 'harness-options.html'],
+]) {
+  const entry = await entryOf(name);
+  await writeFile(path.join(root, 'dist', out), page(title, entry));
+  console.log(`[make-harness] dist/${out} -> ${entry.script}`);
+}
