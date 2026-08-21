@@ -250,6 +250,22 @@ bundled fonts resolve — this test is what proves they do.
 
 ---
 
+## The mark
+
+`npm run icons` regenerates every icon and the README logo from
+`scripts/make-icons.mjs` — signed distance fields rasterised straight to PNG
+with no image dependencies, so one source renders cleanly from 16px to 512px.
+
+It borrows Excalidraw's *visual language* — the wobbly hand-drawn line, the
+`#6965DB` purple — but is deliberately **not** derived from Excalidraw's logo.
+Their MIT licence covers code, not their trademark, and a modified version of
+their mark on a separate Web Store listing would read as an official Excalidraw
+product.
+
+Small sizes get different artwork. At 16px an outline thick enough to be visible
+is also thick enough to close up the cloud's interior, and the mark reads as a
+spiral; below 24px it renders as a solid silhouette instead.
+
 ## Bundle size
 
 `dist/` is roughly 22 MB, dominated by two things:

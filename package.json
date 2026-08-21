@@ -12,6 +12,7 @@
     "copy-assets": "node scripts/copy-excalidraw-assets.mjs",
     "postinstall": "node scripts/copy-excalidraw-assets.mjs",
     "check:remote": "node scripts/check-no-remote-code.mjs",
+    "icons": "node scripts/make-icons.mjs",
     "harness": "node scripts/make-harness.mjs"
   },
   "dependencies": {
