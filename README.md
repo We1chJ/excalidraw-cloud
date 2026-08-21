@@ -261,15 +261,25 @@ but is deliberately **not** derived from Excalidraw's logo. Their MIT licence
 covers code, not their trademark, and a modified version of their mark on a
 separate Web Store listing would read as an official Excalidraw product.
 
-It renders monochrome: a white mark on a near-black tile. Dark rather than
-light, because a white tile disappears against GitHub's light page background
-and against a light browser toolbar. Near-black rather than `#000`, because pure
-black loses its edge on GitHub's dark background. Inverting it is a two-constant
-change at the top of the script.
+It is black pen on white paper — `#1B1B1F`, Excalidraw's own default stroke
+colour, on flat white. No tint and no gradient anywhere.
+
+Every stroke is drawn **twice**, with different wobble seeds, so the two passes
+diverge and cross the way a pen does when you sketch a shape without lifting it.
+That double pass is the most recognisable thing about roughjs, and so about how
+Excalidraw looks: one clean wobbly line reads as a decorative font, two
+overlapping ones read as drawn. It only works if the pen is thin enough for a
+gap to open between the passes — at the earlier `0.040` weight they overlapped
+completely and looked like a single lumpy line.
 
 Small sizes get different artwork. At 16px an outline thick enough to be visible
 is also thick enough to close up the cloud's interior, and the mark reads as a
 spiral; below 24px it renders as a solid silhouette instead.
+
+The paper is white rather than transparent because a transparent black mark
+disappears on a dark browser toolbar. The trade-off is that the README logo is a
+white card on GitHub's dark theme; if that bothers you, generate an inverted
+variant and select it with `<picture>` and `prefers-color-scheme`.
 
 ## Bundle size
 

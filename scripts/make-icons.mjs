@@ -15,21 +15,14 @@ import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
 
-// Monochrome: white hand-drawn mark on a near-black tile, with a ~4% vertical
-// shift that keeps 512px from looking dead flat without being nameable as a
-// gradient.
+// Black pen on white paper. No tint anywhere -- #1B1B1F is Excalidraw's own
+// default stroke colour, and the tile is flat white with no gradient at all.
 //
-// Near-black rather than pure black, and dark rather than light, for two
-// reasons. A white tile would disappear against GitHub's light page background
-// and against a light browser toolbar, whereas a dark tile stays defined in
-// both themes. And #000 sitting on GitHub's dark background (#0d1117) would
-// lose its edge entirely -- this sits just far enough above it to hold shape.
-//
-// To invert (black mark on white), swap these for [255,255,255]/[247,247,249]
-// and set INK to [26,26,31].
-const TILE_TOP = [35, 35, 41];     // #232329
-const TILE_BOTTOM = [25, 25, 30];  // #19191E
-const INK = [255, 255, 255];
+// White paper rather than transparent: a transparent black mark vanishes on a
+// dark browser toolbar, and the paper is half of what makes it read as a
+// sketch rather than a glyph.
+const PAPER = [255, 255, 255];
+const INK = [27, 27, 31]; // #1B1B1F
 
 // ---------------------------------------------------------------- png writer
 
@@ -147,25 +140,41 @@ function strokeDist(px, py, segs, seed) {
   }
   // One wobble for the whole polyline rather than per segment: per-segment noise
   // makes a continuous stroke look chopped into pieces.
-  return d + wobble(px, py, 0.005, seed);
+  return d + wobble(px, py, 0.007, seed);
 }
 
 // ------------------------------------------------------------------ renderer
 
-/** True where the mark's white ink covers this point. */
+/**
+ * True where ink covers this point.
+ *
+ * Every stroke is drawn TWICE with different wobble seeds, so the two passes
+ * diverge and cross the way a pen does when you sketch a shape without lifting
+ * it. That double pass is the single most recognisable thing about roughjs, and
+ * therefore about how Excalidraw looks -- a single clean wobbly line reads as a
+ * decorative font, two overlapping ones read as drawn.
+ */
 function inkAt(px, py, cfg) {
   const cx = (px - 0.5 - cfg.ox) / cfg.k + 0.5;
   const cy = (py - 0.5 - cfg.oy) / cfg.k + 0.5;
 
-  const signed = sdCloud(cx, cy) + wobble(cx, cy, 0.008, 0.4);
+  if (cfg.solid) {
+    return sdCloud(cx, cy) + wobble(cx, cy, 0.012, 0.4) <= 0;
+  }
 
-  // At display sizes the cloud is an OUTLINE, not a fill: everything in
-  // Excalidraw is an outline, and it is what makes the mark read as hand-drawn.
-  if (cfg.solid) return signed <= 0;
+  const base = sdCloud(cx, cy);
+  const half = cfg.outlineW / 2;
 
-  const cloud = Math.abs(signed) - cfg.outlineW / 2;
-  const scribble = strokeDist(cx, cy, SCRIBBLE, 1.7) - cfg.scribbleW / 2;
-  return Math.min(cloud, scribble) <= 0;
+  // Two passes over the cloud outline. The second is nudged outward slightly so
+  // the pair reads as an overshooting second stroke rather than a thick line.
+  const pass1 = Math.abs(base + wobble(cx, cy, 0.010, 0.4)) - half;
+  const pass2 = Math.abs(base + wobble(cx, cy, 0.011, 3.7) - 0.016) - half * 0.9;
+
+  // Two passes over the wave as well.
+  const w1 = strokeDist(cx, cy, SCRIBBLE, 1.7) - cfg.scribbleW / 2;
+  const w2 = strokeDist(cx, cy, SCRIBBLE, 6.2) - cfg.scribbleW * 0.45;
+
+  return Math.min(pass1, pass2, w1, w2) <= 0;
 }
 
 /**
@@ -215,11 +224,12 @@ function render(size) {
     solid,
     // Stroke weight in unit space, clamped so the outline never falls below
     // ~1.7 device pixels -- a hairline outline disappears entirely at 16px.
-    outlineW: Math.max(0.052, 1.7 / size),
-    scribbleW: Math.max(0.040, 1.4 / size),
-    // The solid variant is scaled up: without an outline around it, the
-    // silhouette alone leaves too much empty tile.
-    k: solid ? 1.14 : 1,
+    outlineW: Math.max(0.026, 1.7 / size),
+    scribbleW: Math.max(0.024, 1.4 / size),
+    // Scaled up from the tile-era sizing. The paper is white and invisible
+    // against a light page, so margins that framed a coloured tile now read as
+    // nothing but empty space.
+    k: solid ? 1.34 : 1.26,
     ox: 0,
     oy: 0,
   };
@@ -260,12 +270,9 @@ function render(size) {
       const bgA = bg / total;
       const inkA = ink / total;
 
-      // Vertical gradient across the tile.
-      const t = y / Math.max(1, size - 1);
       const i = (y * size + x) * 4;
       for (let c = 0; c < 3; c++) {
-        const base = TILE_TOP[c] + (TILE_BOTTOM[c] - TILE_TOP[c]) * t;
-        buf[i + c] = Math.round(base * (1 - inkA) + INK[c] * inkA);
+        buf[i + c] = Math.round(PAPER[c] * (1 - inkA) + INK[c] * inkA);
       }
       buf[i + 3] = Math.round(bgA * 255);
     }
