@@ -15,8 +15,15 @@ import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
 
-const VIOLET = [124, 118, 240]; // gradient top
-const INDIGO = [88, 82, 199];   // gradient bottom
+// Excalidraw's brand purple is #6965DB. The tile is that colour, with a ~5%
+// vertical shift centred on it -- lighter above, darker below -- so the eye
+// reads a single confident colour with a little depth, not "a gradient".
+//
+// The previous version fell 15% across the tile, which is the look every
+// generated logo has. Restraint is the whole difference: real product marks are
+// flat or near-flat, and the gradient should not be nameable.
+const TILE_TOP = [111, 107, 224];    // #6F6BE0
+const TILE_BOTTOM = [99, 95, 214];   // #635FD6
 const PAPER = [255, 255, 255];
 
 // ---------------------------------------------------------------- png writer
@@ -252,7 +259,7 @@ function render(size) {
       const t = y / Math.max(1, size - 1);
       const i = (y * size + x) * 4;
       for (let c = 0; c < 3; c++) {
-        const base = VIOLET[c] + (INDIGO[c] - VIOLET[c]) * t;
+        const base = TILE_TOP[c] + (TILE_BOTTOM[c] - TILE_TOP[c]) * t;
         buf[i + c] = Math.round(base * (1 - inkA) + PAPER[c] * inkA);
       }
       buf[i + 3] = Math.round(bgA * 255);
