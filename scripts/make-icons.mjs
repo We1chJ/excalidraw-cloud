@@ -92,22 +92,16 @@ function wobble(px, py, amp, seed = 0) {
 }
 
 /**
- * The artwork's own bounding box is taller above the base than below it, so
- * without this nudge the mark sits visibly high in the tile.
- */
-const OY = 0.062;
-
-/**
  * The cloud: four lobes over a flat base. Lobe centres are spread wider and the
  * radii differ more than a naive cloud, because at 16px similar lobes merge into
  * an amorphous lump.
  */
 function sdCloud(px, py) {
   return Math.min(
-    sdCircle(px, py, 0.430, 0.400 + OY, 0.170),
-    sdCircle(px, py, 0.660, 0.470 + OY, 0.128),
-    sdCircle(px, py, 0.258, 0.478 + OY, 0.108),
-    sdRoundedBox(px, py, 0.455, 0.545 + OY, 0.245, 0.070, 0.062),
+    sdCircle(px, py, 0.430, 0.400, 0.170),
+    sdCircle(px, py, 0.660, 0.470, 0.128),
+    sdCircle(px, py, 0.258, 0.478, 0.108),
+    sdRoundedBox(px, py, 0.455, 0.545, 0.245, 0.070, 0.062),
   );
 }
 
@@ -122,7 +116,7 @@ function sdCloud(px, py) {
 function makeScribble(periods, amp, x0, x1) {
   const segs = [];
   const steps = 16;
-  const at = (t) => [x0 + (x1 - x0) * t, 0.458 + OY + amp * Math.sin(t * Math.PI * periods)];
+  const at = (t) => [x0 + (x1 - x0) * t, 0.458 + amp * Math.sin(t * Math.PI * periods)];
   for (let i = 0; i < steps; i++) {
     segs.push([...at(i / steps), ...at((i + 1) / steps)]);
   }
@@ -146,6 +140,49 @@ function strokeDist(px, py, segs, seed) {
 
 // ------------------------------------------------------------------ renderer
 
+/** True where the mark's white ink covers this point. */
+function inkAt(px, py, cfg) {
+  const cx = (px - 0.5 - cfg.ox) / cfg.k + 0.5;
+  const cy = (py - 0.5 - cfg.oy) / cfg.k + 0.5;
+
+  const signed = sdCloud(cx, cy) + wobble(cx, cy, 0.008, 0.4);
+
+  // At display sizes the cloud is an OUTLINE, not a fill: everything in
+  // Excalidraw is an outline, and it is what makes the mark read as hand-drawn.
+  if (cfg.solid) return signed <= 0;
+
+  const cloud = Math.abs(signed) - cfg.outlineW / 2;
+  const scribble = strokeDist(cx, cy, SCRIBBLE, 1.7) - cfg.scribbleW / 2;
+  return Math.min(cloud, scribble) <= 0;
+}
+
+/**
+ * Measures the ink's actual bounding box.
+ *
+ * The artwork is not symmetric -- the cloud's lobes sit higher than its base and
+ * the right lobe is larger than the left -- so its geometric centre is nowhere
+ * near the centre of its defining coordinates. Measuring beats hand-tuning an
+ * offset constant, and it stays correct if the artwork is edited later.
+ */
+function measureInk(cfg) {
+  const N = 360;
+  let minX = 1, minY = 1, maxX = 0, maxY = 0;
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const px = (i + 0.5) / N;
+      const py = (j + 0.5) / N;
+      if (!inkAt(px, py, cfg)) continue;
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+const MARGINS = [];
+
 function render(size) {
   const buf = Buffer.alloc(size * size * 4);
   // Small sizes need more samples: at 16px a single pixel spans a lot of the
@@ -153,20 +190,45 @@ function render(size) {
   const SS = size <= 32 ? 6 : 4;
   const total = SS * SS;
 
-  // Stroke weight in unit space. Clamped so the outline never falls below ~1.7
-  // device pixels -- a hairline outline disappears entirely at 16px.
-  const outlineW = Math.max(0.052, 1.7 / size);
-  const scribbleW = Math.max(0.040, 1.4 / size);
-
   // Below this size the mark is drawn as a solid silhouette instead of an
   // outline with a wave inside.
   //
-  // At 16px a stroke thick enough to be visible is also thick enough to close
-  // up the cloud's interior, and the wave merges into it -- the result reads as
-  // a spiral, not a cloud. A filled cloud reads instantly at any size. Swapping
+  // At 16px a stroke thick enough to be visible is also thick enough to close up
+  // the cloud's interior, and the wave merges into it -- the result reads as a
+  // spiral, not a cloud. A filled cloud reads instantly at any size. Swapping
   // artwork for small sizes is standard icon practice.
-  const SOLID_BELOW = 24;
-  const solid = size <= SOLID_BELOW;
+  const solid = size <= 24;
+
+  const cfg = {
+    solid,
+    // Stroke weight in unit space, clamped so the outline never falls below
+    // ~1.7 device pixels -- a hairline outline disappears entirely at 16px.
+    outlineW: Math.max(0.052, 1.7 / size),
+    scribbleW: Math.max(0.040, 1.4 / size),
+    // The solid variant is scaled up: without an outline around it, the
+    // silhouette alone leaves too much empty tile.
+    k: solid ? 1.14 : 1,
+    ox: 0,
+    oy: 0,
+  };
+
+  // Centre the ink in the tile. Measured against the same cfg that renders it,
+  // so the outline width and the small-size scale are both accounted for.
+  const box = measureInk(cfg);
+  cfg.ox = 0.5 - (box.minX + box.maxX) / 2;
+  cfg.oy = 0.5 - (box.minY + box.maxY) / 2;
+
+  // Re-measure and report the margins. Centring is easy to break by editing the
+  // artwork, and easy not to notice; printing the numbers makes it checkable
+  // without having to eyeball a 16px image.
+  const after = measureInk(cfg);
+  MARGINS.push({
+    size,
+    left: after.minX,
+    right: 1 - after.maxX,
+    top: after.minY,
+    bottom: 1 - after.maxY,
+  });
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -179,24 +241,7 @@ function render(size) {
           const py = (y + (sy + 0.5) / SS) / size;
 
           if (sdRoundedBox(px, py, 0.5, 0.5, 0.5, 0.5, 0.225) <= 0) bg++;
-
-          // At display sizes the cloud is an OUTLINE, not a fill: everything in
-          // Excalidraw is an outline, and it is what makes the mark read as
-          // hand-drawn.
-          // The solid variant is scaled up: without the outline around it the
-          // silhouette alone leaves too much empty tile.
-          const k = solid ? 1.14 : 1;
-          const cx = (px - 0.5) / k + 0.5;
-          const cy = (py - 0.5) / k + 0.5;
-          const signed = sdCloud(cx, cy) + wobble(cx, cy, 0.008, 0.4);
-
-          if (solid) {
-            if (signed <= 0) ink++;
-          } else {
-            const cloud = Math.abs(signed) - outlineW / 2;
-            const scribble = strokeDist(cx, cy, SCRIBBLE, 1.7) - scribbleW / 2;
-            if (Math.min(cloud, scribble) <= 0) ink++;
-          }
+          if (inkAt(px, py, cfg)) ink++;
         }
       }
 
@@ -231,3 +276,16 @@ const docsDir = path.join(root, 'docs/assets');
 mkdirSync(docsDir, { recursive: true });
 writeFileSync(path.join(docsDir, 'logo.png'), png(512, render(512)));
 console.log('[make-icons] docs/assets/logo.png');
+
+console.log('');
+console.log('[make-icons] ink margins (left/right and top/bottom should match):');
+for (const m of MARGINS) {
+  const f = (n) => n.toFixed(4);
+  const dx = Math.abs(m.left - m.right);
+  const dy = Math.abs(m.top - m.bottom);
+  const ok = dx < 0.005 && dy < 0.005 ? 'centred' : 'OFF-CENTRE';
+  console.log(
+    `  ${String(m.size).padStart(3)}px  L ${f(m.left)}  R ${f(m.right)}  ` +
+    `T ${f(m.top)}  B ${f(m.bottom)}   ${ok}`,
+  );
+}
