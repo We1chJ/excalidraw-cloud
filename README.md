@@ -256,11 +256,16 @@ bundled fonts resolve — this test is what proves they do.
 `scripts/make-icons.mjs` — signed distance fields rasterised straight to PNG
 with no image dependencies, so one source renders cleanly from 16px to 512px.
 
-It borrows Excalidraw's *visual language* — the wobbly hand-drawn line, the
-`#6965DB` purple — but is deliberately **not** derived from Excalidraw's logo.
-Their MIT licence covers code, not their trademark, and a modified version of
-their mark on a separate Web Store listing would read as an official Excalidraw
-product.
+It borrows Excalidraw's *visual language* — the wobbly hand-drawn line quality —
+but is deliberately **not** derived from Excalidraw's logo. Their MIT licence
+covers code, not their trademark, and a modified version of their mark on a
+separate Web Store listing would read as an official Excalidraw product.
+
+It renders monochrome: a white mark on a near-black tile. Dark rather than
+light, because a white tile disappears against GitHub's light page background
+and against a light browser toolbar. Near-black rather than `#000`, because pure
+black loses its edge on GitHub's dark background. Inverting it is a two-constant
+change at the top of the script.
 
 Small sizes get different artwork. At 16px an outline thick enough to be visible
 is also thick enough to close up the cloud's interior, and the mark reads as a

@@ -1,9 +1,9 @@
 // Generates the toolbar/store icons and the README logo as PNGs, with no image
 // dependencies. Run `npm run icons` after changing the artwork below.
 //
-// Art direction: Excalidraw's visual language -- the wobbly hand-drawn line and
-// the #6965DB purple -- WITHOUT deriving from Excalidraw's actual logo, which is
-// a trademark and not covered by their MIT code licence.
+// Art direction: Excalidraw's visual language -- the wobbly hand-drawn line --
+// WITHOUT deriving from Excalidraw's actual logo, which is a trademark and not
+// covered by their MIT code licence. Rendered monochrome.
 //
 // The mark is a hand-drawn cloud with sketch strokes inside it: drawings, in the
 // cloud. Everything is signed-distance-field based so the same source renders
@@ -15,16 +15,21 @@ import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
 
-// Excalidraw's brand purple is #6965DB. The tile is that colour, with a ~5%
-// vertical shift centred on it -- lighter above, darker below -- so the eye
-// reads a single confident colour with a little depth, not "a gradient".
+// Monochrome: white hand-drawn mark on a near-black tile, with a ~4% vertical
+// shift that keeps 512px from looking dead flat without being nameable as a
+// gradient.
 //
-// The previous version fell 15% across the tile, which is the look every
-// generated logo has. Restraint is the whole difference: real product marks are
-// flat or near-flat, and the gradient should not be nameable.
-const TILE_TOP = [111, 107, 224];    // #6F6BE0
-const TILE_BOTTOM = [99, 95, 214];   // #635FD6
-const PAPER = [255, 255, 255];
+// Near-black rather than pure black, and dark rather than light, for two
+// reasons. A white tile would disappear against GitHub's light page background
+// and against a light browser toolbar, whereas a dark tile stays defined in
+// both themes. And #000 sitting on GitHub's dark background (#0d1117) would
+// lose its edge entirely -- this sits just far enough above it to hold shape.
+//
+// To invert (black mark on white), swap these for [255,255,255]/[247,247,249]
+// and set INK to [26,26,31].
+const TILE_TOP = [35, 35, 41];     // #232329
+const TILE_BOTTOM = [25, 25, 30];  // #19191E
+const INK = [255, 255, 255];
 
 // ---------------------------------------------------------------- png writer
 
@@ -260,7 +265,7 @@ function render(size) {
       const i = (y * size + x) * 4;
       for (let c = 0; c < 3; c++) {
         const base = TILE_TOP[c] + (TILE_BOTTOM[c] - TILE_TOP[c]) * t;
-        buf[i + c] = Math.round(base * (1 - inkA) + PAPER[c] * inkA);
+        buf[i + c] = Math.round(base * (1 - inkA) + INK[c] * inkA);
       }
       buf[i + 3] = Math.round(bgA * 255);
     }
