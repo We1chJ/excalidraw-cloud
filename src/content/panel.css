@@ -163,6 +163,12 @@
   color: var(--text);
 }
 
+.icon.small {
+  width: 18px;
+  height: 18px;
+  font-size: 14px;
+}
+
 .link {
   padding: 1px 4px;
   font-size: 11px;
@@ -261,6 +267,83 @@ button:disabled {
   padding-left: 20px;
 }
 
+/* ---------- preview ---------- */
+
+.preview-card {
+  position: fixed;
+  right: 334px;               /* clears the 310px panel plus its 12px inset */
+  z-index: 2147483000;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  animation: preview-in 110ms ease-out;
+}
+
+.preview-card.pinned {
+  border-color: var(--accent);
+}
+
+@keyframes preview-in {
+  from { opacity: 0; transform: translateX(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-card { animation: none; }
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 6px;
+}
+
+.preview-label {
+  font-size: 11px;
+  font-weight: 500;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The thumbnail paints the scene's own background colour, so it needs its own
+   rounded clip rather than inheriting the card's. */
+.preview {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.preview svg {
+  display: block;
+}
+
+.preview-empty {
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.preview-more {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 10px;
+}
+
 /* ---------- history ---------- */
 
 .history {
@@ -272,10 +355,30 @@ button:disabled {
 
 .history li {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 8px;
-  padding: 2px 0;
+  padding: 1px 0;
+}
+
+.snap {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 4px;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.snap:hover {
+  border-color: var(--border);
+  background: var(--bg);
 }
 
 .when {

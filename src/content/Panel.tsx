@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   checkHealth,
   hasContent,
@@ -19,6 +19,10 @@ import {
   saveDoc,
 } from '../storage/documents';
 import type { DocMeta, SceneData, Snapshot } from '../storage/types';
+import { ScenePreview } from './ScenePreview';
+
+/** Long enough that sweeping the cursor down the list loads nothing. */
+const HOVER_DELAY_MS = 180;
 
 function relativeTime(ms: number): string {
   const seconds = Math.round((Date.now() - ms) / 1000);
@@ -32,10 +36,17 @@ function relativeTime(ms: number): string {
   return new Date(ms).toLocaleDateString();
 }
 
-/** A load that would overwrite the canvas, held until the user confirms. */
 interface PendingLoad {
   label: string;
   scene: () => Promise<SceneData>;
+}
+
+interface Preview {
+  key: string;
+  label: string;
+  scene: SceneData;
+  top: number;
+  pinned: boolean;
 }
 
 export function Panel() {
@@ -49,8 +60,15 @@ export function Panel() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
+
+  // Scenes carry embedded images, so re-reading IndexedDB on every hover would
+  // be wasteful. Cleared whenever the store changes so previews cannot go stale.
+  const sceneCache = useRef(new Map<string, SceneData>());
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const refresh = useCallback(async () => {
+    sceneCache.current.clear();
     setDocs(await listDocs());
   }, []);
 
@@ -60,7 +78,6 @@ export function Panel() {
     return onStoreChanged(() => void refresh());
   }, [refresh]);
 
-  // The toolbar button toggles the panel; there is no other UI entry point.
   useEffect(() => {
     const handler = (msg: unknown) => {
       if (typeof msg === 'object' && msg && (msg as { type?: string }).type === 'toggle-panel') {
@@ -79,10 +96,71 @@ export function Panel() {
     void listSnapshots(expanded).then(setSnapshots);
   }, [expanded, docs]);
 
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
+
   const flash = (msg: string) => {
     setNotice(msg);
     setTimeout(() => setNotice((n) => (n === msg ? null : n)), 4000);
   };
+
+  // ---- preview ------------------------------------------------------------
+
+  const loadPreviewScene = useCallback(
+    async (key: string, loader: () => Promise<SceneData>): Promise<SceneData> => {
+      const hit = sceneCache.current.get(key);
+      if (hit) return hit;
+      const scene = await loader();
+      sceneCache.current.set(key, scene);
+      return scene;
+    },
+    [],
+  );
+
+  const showPreview = useCallback(
+    (
+      key: string,
+      label: string,
+      loader: () => Promise<SceneData>,
+      anchor: HTMLElement,
+      pinned: boolean,
+    ) => {
+      clearTimeout(hoverTimer.current);
+      const rect = anchor.getBoundingClientRect();
+      const run = async () => {
+        try {
+          const scene = await loadPreviewScene(key, loader);
+          // Keep the card on screen when hovering a row near the bottom.
+          const top = Math.min(Math.max(12, rect.top - 20), window.innerHeight - 210);
+          setPreview({ key, label, scene, top, pinned });
+        } catch {
+          setPreview(null);
+        }
+      };
+      if (pinned) void run();
+      else hoverTimer.current = setTimeout(() => void run(), HOVER_DELAY_MS);
+    },
+    [loadPreviewScene],
+  );
+
+  const hidePreview = useCallback(() => {
+    clearTimeout(hoverTimer.current);
+    setPreview((p) => (p?.pinned ? p : null));
+  }, []);
+
+  const previewProps = (
+    key: string,
+    label: string,
+    loader: () => Promise<SceneData>,
+  ) => ({
+    onMouseEnter: (e: React.MouseEvent<HTMLElement>) =>
+      showPreview(key, label, loader, e.currentTarget, false),
+    onMouseLeave: hidePreview,
+    onFocus: (e: React.FocusEvent<HTMLElement>) =>
+      showPreview(key, label, loader, e.currentTarget, false),
+    onBlur: hidePreview,
+  });
+
+  // ---- actions ------------------------------------------------------------
 
   const saveCurrent = async () => {
     const scene = await readScene();
@@ -103,7 +181,6 @@ export function Panel() {
     flash(result.saved ? `Saved a new version of “${doc.title}”.` : (result.reason ?? 'Nothing to save.'));
   };
 
-  /** Loads only after confirmation, because it replaces the canvas and reloads. */
   const requestLoad = (label: string, scene: () => Promise<SceneData>) => {
     if (!hasContent()) {
       void applyLoad({ label, scene });
@@ -141,171 +218,208 @@ export function Panel() {
   }
 
   return (
-    <aside className="panel">
-      <header className="head">
-        <h1>Drawings</h1>
-        <div className="head-actions">
-          <button className="btn" onClick={() => void saveCurrent()} disabled={!health.ok}>
-            Save canvas
-          </button>
-          <button className="icon" onClick={() => setOpen(false)} title="Close">
-            ×
-          </button>
-        </div>
-      </header>
-
-      {!health.ok && (
-        <div className="alert">
-          <strong>Excalidraw&rsquo;s storage format changed.</strong>
-          <p>{health.reason}</p>
-          <p>
-            Saving and loading are disabled so nothing gets corrupted. This
-            extension reads excalidraw.com&rsquo;s local storage directly, which
-            is not a published API.
-          </p>
+    <>
+      {preview && (
+        <div
+          className={preview.pinned ? 'preview-card pinned' : 'preview-card'}
+          style={{ top: preview.top }}
+          onMouseEnter={() => clearTimeout(hoverTimer.current)}
+          onMouseLeave={hidePreview}
+        >
+          <div className="preview-head">
+            <span className="preview-label">{preview.label}</span>
+            {preview.pinned && (
+              <button className="icon small" onClick={() => setPreview(null)} title="Close preview">
+                ×
+              </button>
+            )}
+          </div>
+          <ScenePreview scene={preview.scene} />
         </div>
       )}
 
-      {notice && <div className="notice">{notice}</div>}
-
-      {pending && (
-        <div className="confirm">
-          <p>
-            Loading <strong>{pending.label}</strong> replaces everything on the
-            canvas and reloads the page.
-          </p>
-          <p className="dim">Save the current canvas first if you want to keep it.</p>
-          <div className="confirm-actions">
-            <button className="btn danger" onClick={() => void applyLoad(pending)}>
-              Replace canvas
+      <aside className="panel">
+        <header className="head">
+          <h1>Drawings</h1>
+          <div className="head-actions">
+            <button className="btn" onClick={() => void saveCurrent()} disabled={!health.ok}>
+              Save canvas
             </button>
-            <button className="btn" onClick={() => setPending(null)}>
-              Cancel
+            <button className="icon" onClick={() => setOpen(false)} title="Close">
+              ×
             </button>
           </div>
-        </div>
-      )}
+        </header>
 
-      {docs.length === 0 ? (
-        <p className="empty">
-          No drawings saved yet. Draw something, then choose <em>Save canvas</em>.
-        </p>
-      ) : (
-        <ul className="docs">
-          {docs.map((doc) => (
-            <li key={doc.id} className={expanded === doc.id ? 'doc open' : 'doc'}>
-              <div className="doc-head">
-                {renaming === doc.id ? (
-                  <input
-                    className="rename"
-                    autoFocus
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onBlur={() => void commitRename()}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void commitRename();
-                      if (e.key === 'Escape') setRenaming(null);
-                    }}
-                  />
-                ) : (
-                  <button
-                    className="doc-title"
-                    onClick={() => setExpanded(expanded === doc.id ? null : doc.id)}
-                    aria-expanded={expanded === doc.id}
-                  >
-                    <span className="chev" aria-hidden="true">
-                      {expanded === doc.id ? '▾' : '▸'}
-                    </span>
-                    <span className="name">{doc.title}</span>
-                    <span className="meta">
-                      {doc.elementCount} items · {relativeTime(doc.updatedAt)}
-                    </span>
-                  </button>
-                )}
-              </div>
+        {!health.ok && (
+          <div className="alert">
+            <strong>Excalidraw&rsquo;s storage format changed.</strong>
+            <p>{health.reason}</p>
+            <p>
+              Saving and loading are disabled so nothing gets corrupted. This
+              extension reads excalidraw.com&rsquo;s local storage directly,
+              which is not a published API.
+            </p>
+          </div>
+        )}
 
-              {/* Always rendered, never hover-gated: hiding controls behind
-                  :hover removes them from the accessibility tree entirely. */}
-              <div className="doc-actions">
-                <button
-                  className="link"
-                  onClick={() => requestLoad(doc.title, () => loadDoc(doc.id))}
-                  disabled={!health.ok}
-                >
-                  Open
-                </button>
-                <button className="link" onClick={() => void updateDoc(doc)} disabled={!health.ok}>
-                  Save version
-                </button>
-                <button
-                  className="link"
-                  onClick={() => {
-                    setRenaming(doc.id);
-                    setDraft(doc.title);
-                  }}
-                >
-                  Rename
-                </button>
-                {confirmDelete === doc.id ? (
-                  <>
+        {notice && <div className="notice">{notice}</div>}
+
+        {pending && (
+          <div className="confirm">
+            <p>
+              Loading <strong>{pending.label}</strong> replaces everything on the
+              canvas and reloads the page.
+            </p>
+            <p className="dim">Save the current canvas first if you want to keep it.</p>
+            <div className="confirm-actions">
+              <button className="btn danger" onClick={() => void applyLoad(pending)}>
+                Replace canvas
+              </button>
+              <button className="btn" onClick={() => setPending(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {docs.length === 0 ? (
+          <p className="empty">
+            No drawings saved yet. Draw something, then choose <em>Save canvas</em>.
+          </p>
+        ) : (
+          <ul className="docs">
+            {docs.map((doc) => {
+              const docKey = `doc:${doc.id}`;
+              return (
+                <li key={doc.id} className={expanded === doc.id ? 'doc open' : 'doc'}>
+                  <div className="doc-head">
+                    {renaming === doc.id ? (
+                      <input
+                        className="rename"
+                        autoFocus
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={() => void commitRename()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void commitRename();
+                          if (e.key === 'Escape') setRenaming(null);
+                        }}
+                      />
+                    ) : (
+                      <button
+                        className="doc-title"
+                        aria-expanded={expanded === doc.id}
+                        {...previewProps(docKey, doc.title, () => loadDoc(doc.id))}
+                        onClick={(e) => {
+                          setExpanded(expanded === doc.id ? null : doc.id);
+                          // Clicking pins the preview so it survives the cursor
+                          // leaving the row.
+                          showPreview(docKey, doc.title, () => loadDoc(doc.id), e.currentTarget, true);
+                        }}
+                      >
+                        <span className="chev" aria-hidden="true">
+                          {expanded === doc.id ? '▾' : '▸'}
+                        </span>
+                        <span className="name">{doc.title}</span>
+                        <span className="meta">
+                          {doc.elementCount} items · {relativeTime(doc.updatedAt)}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Always rendered, never hover-gated: visibility:hidden would
+                      remove these from the accessibility tree entirely. */}
+                  <div className="doc-actions">
                     <button
-                      className="link danger"
-                      onClick={async () => {
-                        await deleteDoc(doc.id);
-                        setConfirmDelete(null);
-                        if (expanded === doc.id) setExpanded(null);
-                        await refresh();
+                      className="link"
+                      onClick={() => requestLoad(doc.title, () => loadDoc(doc.id))}
+                      disabled={!health.ok}
+                    >
+                      Open
+                    </button>
+                    <button className="link" onClick={() => void updateDoc(doc)} disabled={!health.ok}>
+                      Save version
+                    </button>
+                    <button
+                      className="link"
+                      onClick={() => {
+                        setRenaming(doc.id);
+                        setDraft(doc.title);
                       }}
                     >
-                      Delete for good
+                      Rename
                     </button>
-                    <button className="link" onClick={() => setConfirmDelete(null)}>
-                      Keep
-                    </button>
-                  </>
-                ) : (
-                  <button className="link" onClick={() => setConfirmDelete(doc.id)}>
-                    Delete
-                  </button>
-                )}
-              </div>
-
-              {expanded === doc.id && (
-                <ol className="history">
-                  {snapshots.length === 0 && <li className="dim">No versions yet.</li>}
-                  {snapshots.map((snap, i) => (
-                    <li key={snap.id}>
-                      <span className="when">
-                        {i === 0 ? 'Latest' : relativeTime(snap.takenAt)}
-                      </span>
-                      <span className="dim">{snap.elementCount} items</span>
-                      <button
-                        className="link"
-                        disabled={!health.ok}
-                        onClick={() =>
-                          requestLoad(
-                            `${doc.title} — ${relativeTime(snap.takenAt)}`,
-                            () => loadSnapshot(snap.id),
-                          )
-                        }
-                      >
-                        Restore
+                    {confirmDelete === doc.id ? (
+                      <>
+                        <button
+                          className="link danger"
+                          onClick={async () => {
+                            await deleteDoc(doc.id);
+                            setConfirmDelete(null);
+                            if (expanded === doc.id) setExpanded(null);
+                            setPreview(null);
+                            await refresh();
+                          }}
+                        >
+                          Delete for good
+                        </button>
+                        <button className="link" onClick={() => setConfirmDelete(null)}>
+                          Keep
+                        </button>
+                      </>
+                    ) : (
+                      <button className="link" onClick={() => setConfirmDelete(doc.id)}>
+                        Delete
                       </button>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+                    )}
+                  </div>
 
-      <footer className="foot">
-        <button className="link" onClick={() => chrome.runtime.openOptionsPage()}>
-          Settings
-        </button>
-        <span className="dim">Saved on this device</span>
-      </footer>
-    </aside>
+                  {expanded === doc.id && (
+                    <ol className="history">
+                      {snapshots.length === 0 && <li className="dim">No versions yet.</li>}
+                      {snapshots.map((snap, i) => {
+                        const when = i === 0 ? 'Latest' : relativeTime(snap.takenAt);
+                        const key = `snap:${snap.id}`;
+                        const label = `${doc.title} — ${when}`;
+                        const loader = () => loadSnapshot(snap.id);
+                        return (
+                          <li key={snap.id}>
+                            <button
+                              className="snap"
+                              title={new Date(snap.takenAt).toLocaleString()}
+                              {...previewProps(key, label, loader)}
+                              onClick={(e) => showPreview(key, label, loader, e.currentTarget, true)}
+                            >
+                              <span className="when">{when}</span>
+                              <span className="dim">{snap.elementCount} items</span>
+                            </button>
+                            <button
+                              className="link"
+                              disabled={!health.ok}
+                              onClick={() => requestLoad(label, loader)}
+                            >
+                              Restore
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <footer className="foot">
+          <button className="link" onClick={() => chrome.runtime.openOptionsPage()}>
+            Settings
+          </button>
+          <span className="dim">Saved on this device</span>
+        </footer>
+      </aside>
+    </>
   );
 }

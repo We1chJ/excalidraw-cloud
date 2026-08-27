@@ -20,7 +20,7 @@ nothing on any other site, and it does not replace the editor.
 <br><br>
 
 <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
-<img alt="Bundle" src="https://img.shields.io/badge/bundle-248%20KB-informational?style=flat-square">
+<img alt="Bundle" src="https://img.shields.io/badge/bundle-268%20KB-informational?style=flat-square">
 <img alt="Storage" src="https://img.shields.io/badge/storage-local%20(Drive%20next)-orange?style=flat-square">
 
 </div>
@@ -40,6 +40,7 @@ timeline of versions**, in a panel injected into the page.
 
 - **Save canvas** — store what is on screen as a named drawing
 - **Save version** — add a point to that drawing's timeline
+- **Preview** — hover a drawing or a version to peek at it, click to pin the card
 - **Open / Restore** — put a drawing, or an earlier version of it, back on the canvas
 - Everything else about excalidraw.com is untouched
 
@@ -130,6 +131,14 @@ emits the `files` map only for the `'local'` variant; `'database'` sets it to
 `undefined` and silently drops every embedded image. `toExcalidrawFile()` builds
 the payload by hand and always includes it.
 
+**Thumbnails are drawn by hand, not by `exportToSvg`.** `ScenePreview.tsx`
+renders straight from element geometry into SVG. Excalidraw ships an exporter,
+but importing it pulls the whole editor into a content script that runs on every
+page load — the exact cost this architecture exists to avoid. The thumbnail is
+an approximation and says so: no roughjs wobble, hachure fills render as flat
+translucent colour. It is for recognising *which* drawing this is, not for
+reproducing it.
+
 **Excalidraw is a devDependency, types only.** Importing it at runtime would
 pull the entire editor into a content script that runs on every excalidraw.com
 page load. `sceneVersionOf()` replaces `getSceneVersion()` in a few lines.
@@ -162,8 +171,10 @@ Verified through it: panel injects into a shadow root, health check passes on a
 well-formed scene, save creates a document and first snapshot, editing then
 saving adds a second version, saving an unchanged canvas is refused rather than
 duplicated, restoring an older version swaps the canvas while preserving
-viewport and theme, and corrupting the storage format disables exactly the
-destructive actions.
+viewport and theme, corrupting the storage format disables exactly the
+destructive actions, and previews render rectangles, ellipses, diamonds, arrows,
+freedraw and text with an auto-fitted viewBox — with two versions of the same
+drawing rendering visibly differently.
 
 It does **not** prove injection into the real excalidraw.com, or that the shadow
 root coexists with their UI. That needs a real unpacked load.
