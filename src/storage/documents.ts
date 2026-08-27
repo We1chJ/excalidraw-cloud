@@ -1,134 +1,164 @@
-import { serializeAsJSON, restore, getSceneVersion } from '@excalidraw/excalidraw';
-import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types';
-import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types';
-import { readScene, writeScene, deleteScene } from './db';
+import * as db from './db';
 import * as meta from './meta';
-import type { DocMeta, SceneData } from './types';
+import { sceneVersionOf } from '../excalidraw/bridge';
+import type { DocMeta, ExcalidrawFile, SceneData, Snapshot } from './types';
 
 /**
- * Document-level operations. The UI talks to this; it never touches IndexedDB
- * or chrome.storage directly.
+ * Document operations the sidebar calls. Nothing above this file touches
+ * IndexedDB or chrome.storage directly.
  */
 
 export const UNTITLED = 'Untitled drawing';
 
-function newId(): string {
-  return crypto.randomUUID();
-}
-
 /**
- * Produces the canonical .excalidraw payload.
+ * How many points in a document's timeline we keep.
  *
- * `'local'` is deliberate and not interchangeable with `'database'`:
- * serializeAsJSON only emits the `files` map for `'local'`, so the `'database'`
- * variant drops every embedded image on the floor.
+ * Snapshots hold whole scenes including embedded images, so an unbounded
+ * timeline is how you fill somebody's Drive quota without ever telling them.
  */
-export function serialize(scene: SceneData): string {
-  return serializeAsJSON(
-    scene.elements,
-    scene.appState,
-    scene.files,
-    'local',
-  );
-}
+export const MAX_SNAPSHOTS = 30;
 
-/**
- * restore() is mandatory on the way in -- it migrates older schemas, repairs
- * element bindings, and rebuilds fields the editor expects as live objects
- * rather than plain JSON (collaborators being the classic one).
- */
-export function deserialize(json: string): SceneData {
-  const restored = restore(JSON.parse(json), null, null);
-  return {
-    elements: restored.elements,
-    appState: restored.appState,
-    files: restored.files,
-  };
-}
+const newId = () => crypto.randomUUID();
 
 export const listDocs = meta.listDocs;
 export const getDoc = meta.getDoc;
-export const onIndexChanged = meta.onIndexChanged;
+export const listSnapshots = meta.listSnapshots;
+export const onStoreChanged = meta.onStoreChanged;
 export const getActiveDocId = meta.getActiveDocId;
 export const setActiveDocId = meta.setActiveDocId;
+export const estimateUsage = db.estimateUsage;
 
-export async function createDoc(title = UNTITLED): Promise<DocMeta> {
+/**
+ * Builds the canonical .excalidraw payload.
+ *
+ * Hand-built rather than via serializeAsJSON: importing @excalidraw/excalidraw
+ * at runtime would pull the whole editor into the content script. `files` is
+ * always populated -- the library's 'database' variant sets it to undefined,
+ * which silently drops every embedded image.
+ */
+export function toExcalidrawFile(scene: SceneData): ExcalidrawFile {
+  return {
+    type: 'excalidraw',
+    version: 2,
+    source: 'https://excalidraw.com',
+    elements: scene.elements,
+    // Only the two fields that describe the drawing itself. Everything else in
+    // AppState is editor preference (theme, current tool, viewport) and belongs
+    // to whoever opens the file, not to the file.
+    appState: {
+      viewBackgroundColor: scene.appState.viewBackgroundColor ?? '#ffffff',
+      ...(typeof scene.appState.gridSize === 'number'
+        ? { gridSize: scene.appState.gridSize }
+        : {}),
+    },
+    files: scene.files ?? {},
+  };
+}
+
+export function fromExcalidrawFile(json: string): SceneData {
+  const parsed = JSON.parse(json) as Partial<ExcalidrawFile>;
+  if (!Array.isArray(parsed.elements)) {
+    throw new Error('That file does not look like an .excalidraw drawing.');
+  }
+  return {
+    elements: parsed.elements,
+    appState: parsed.appState ?? {},
+    files: parsed.files ?? {},
+  };
+}
+
+/** Saves the given scene as a new document, with its first snapshot. */
+export async function createDoc(title: string, scene: SceneData): Promise<DocMeta> {
   const now = Date.now();
   const doc: DocMeta = {
     id: newId(),
-    title,
+    title: title.trim() || UNTITLED,
     createdAt: now,
     updatedAt: now,
-    sceneVersion: 0,
+    sceneVersion: sceneVersionOf(scene.elements),
+    elementCount: scene.elements.length,
     syncState: 'local',
   };
-  await writeScene(doc.id, { elements: [], appState: {}, files: {} });
+  await db.writeScene(doc.id, scene);
   await meta.putDoc(doc);
+  await takeSnapshot(doc.id, scene, now);
   return doc;
-}
-
-export async function loadScene(id: string): Promise<SceneData> {
-  const stored = await readScene(id);
-  if (!stored) return { elements: [], appState: {}, files: {} };
-  // Round-trip through restore so a scene written by an older version of the
-  // editor still opens cleanly.
-  return deserialize(serialize(stored));
 }
 
 export interface SaveResult {
   saved: boolean;
+  reason?: string;
   meta?: DocMeta;
 }
 
 /**
- * Writes the scene if it actually changed.
+ * Updates a document from the live canvas and adds a timeline entry.
  *
- * onChange fires on every pointer move during a drag, and also for pans, zooms
- * and selection changes that alter nothing persistent. Comparing scene versions
- * keeps those from bumping updatedAt and queuing pointless syncs.
+ * Returns saved:false when nothing changed, so re-saving an untouched canvas
+ * does not pile up identical snapshots.
  */
-export async function saveScene(
-  id: string,
-  elements: readonly OrderedExcalidrawElement[],
-  appState: Partial<AppState>,
-  files: BinaryFiles,
-): Promise<SaveResult> {
+export async function saveDoc(id: string, scene: SceneData): Promise<SaveResult> {
   const existing = await meta.getDoc(id);
-  if (!existing) return { saved: false };
+  if (!existing) return { saved: false, reason: 'That drawing no longer exists.' };
 
-  const sceneVersion = getSceneVersion(elements);
-  if (sceneVersion === existing.sceneVersion) return { saved: false };
+  const version = sceneVersionOf(scene.elements);
+  if (version === existing.sceneVersion) {
+    return { saved: false, reason: 'No changes since the last save.' };
+  }
 
-  // Normalize through the serializer so IndexedDB never holds ephemeral UI
-  // state (selection, cursor, the element currently being edited).
-  const scene = deserialize(serialize({ elements, appState, files }));
-  await writeScene(id, scene);
-
+  const now = Date.now();
+  await db.writeScene(id, scene);
   const updated = await meta.patchDoc(id, {
-    sceneVersion,
-    updatedAt: Date.now(),
-    // A local edit invalidates any previous 'synced' claim.
-    syncState: existing.syncState === 'error' ? 'error' : 'local',
+    sceneVersion: version,
+    elementCount: scene.elements.length,
+    updatedAt: now,
+    syncState: 'local',
   });
+  await takeSnapshot(id, scene, now);
   return { saved: true, meta: updated };
 }
 
+async function takeSnapshot(docId: string, scene: SceneData, takenAt: number): Promise<void> {
+  const entry: Snapshot = {
+    id: newId(),
+    docId,
+    takenAt,
+    sceneVersion: sceneVersionOf(scene.elements),
+    elementCount: scene.elements.length,
+  };
+  await db.putSnapshot({ id: entry.id, docId, takenAt, scene });
+
+  const existing = await meta.listSnapshots(docId);
+  const next = [entry, ...existing];
+
+  // Trim oldest-first, deleting bodies as we go so IndexedDB does not keep
+  // scenes the index no longer references.
+  const dropped = next.slice(MAX_SNAPSHOTS);
+  for (const old of dropped) await db.deleteSnapshot(old.id);
+  await meta.setSnapshots(docId, next.slice(0, MAX_SNAPSHOTS));
+}
+
+/** The document's current scene. */
+export async function loadDoc(id: string): Promise<SceneData> {
+  const scene = await db.readScene(id);
+  if (!scene) throw new Error('That drawing could not be found on this device.');
+  return scene;
+}
+
+/** A specific point in a document's timeline. */
+export async function loadSnapshot(snapshotId: string): Promise<SceneData> {
+  const stored = await db.readSnapshot(snapshotId);
+  if (!stored) throw new Error('That version could not be found on this device.');
+  return stored.scene;
+}
+
 export async function renameDoc(id: string, title: string): Promise<void> {
-  await meta.patchDoc(id, { title: title.trim() || UNTITLED, updatedAt: Date.now() });
+  await meta.patchDoc(id, { title: title.trim() || UNTITLED });
 }
 
 export async function deleteDoc(id: string): Promise<void> {
-  await deleteScene(id);
+  await db.deleteScene(id);
+  await db.deleteSnapshotsForDoc(id);
+  await meta.dropSnapshots(id);
   await meta.removeDoc(id);
-}
-
-/** Imports a .excalidraw file as a new document. */
-export async function importDoc(title: string, json: string): Promise<DocMeta> {
-  const scene = deserialize(json);
-  const doc = await createDoc(title);
-  await writeScene(doc.id, scene);
-  const updated = await meta.patchDoc(doc.id, {
-    sceneVersion: getSceneVersion(scene.elements),
-  });
-  return updated ?? doc;
 }

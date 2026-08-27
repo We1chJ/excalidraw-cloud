@@ -12,23 +12,10 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
   return {
     plugins: [react(), crx({ manifest })],
 
-    define: {
-      // Excalidraw reads this to pick its React vs Preact build. Without the
-      // define, the bundle throws "process is not defined" at import time.
-      'process.env.IS_PREACT': JSON.stringify('false'),
-    },
-
     build: {
       target: 'esnext',
       // esbuild minification never emits eval(); MV3's CSP rejects it.
       minify: 'esbuild',
-      rollupOptions: {
-        input: {
-          // The editor is opened via chrome.tabs.create rather than being
-          // referenced from the manifest, so it needs an explicit entry.
-          editor: 'src/editor/index.html',
-        },
-      },
     },
 
     server: {

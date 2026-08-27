@@ -1,4 +1,4 @@
-import type { DocMeta } from './types';
+import type { DocMeta, Snapshot } from './types';
 
 /**
  * The document index lives in chrome.storage.local rather than IndexedDB so the
@@ -10,8 +10,10 @@ import type { DocMeta } from './types';
 
 const INDEX_KEY = 'docIndex';
 const ACTIVE_KEY = 'activeDocId';
+const SNAPSHOT_KEY = 'snapshotIndex';
 
 type DocIndex = Record<string, DocMeta>;
+type SnapshotIndex = Record<string, Snapshot[]>;
 
 export async function readIndex(): Promise<DocIndex> {
   const result = await chrome.storage.local.get(INDEX_KEY);
@@ -52,6 +54,30 @@ export async function removeDoc(id: string): Promise<void> {
   await chrome.storage.local.set({ [INDEX_KEY]: index });
 }
 
+export async function readSnapshotIndex(): Promise<SnapshotIndex> {
+  const result = await chrome.storage.local.get(SNAPSHOT_KEY);
+  return (result[SNAPSHOT_KEY] as SnapshotIndex | undefined) ?? {};
+}
+
+/** Newest first. */
+export async function listSnapshots(docId: string): Promise<Snapshot[]> {
+  const index = await readSnapshotIndex();
+  return [...(index[docId] ?? [])].sort((a, b) => b.takenAt - a.takenAt);
+}
+
+export async function setSnapshots(docId: string, entries: Snapshot[]): Promise<void> {
+  const index = await readSnapshotIndex();
+  if (entries.length) index[docId] = entries;
+  else delete index[docId];
+  await chrome.storage.local.set({ [SNAPSHOT_KEY]: index });
+}
+
+export async function dropSnapshots(docId: string): Promise<void> {
+  const index = await readSnapshotIndex();
+  delete index[docId];
+  await chrome.storage.local.set({ [SNAPSHOT_KEY]: index });
+}
+
 export async function getActiveDocId(): Promise<string | undefined> {
   const result = await chrome.storage.local.get(ACTIVE_KEY);
   return result[ACTIVE_KEY] as string | undefined;
@@ -61,15 +87,18 @@ export async function setActiveDocId(id: string): Promise<void> {
   await chrome.storage.local.set({ [ACTIVE_KEY]: id });
 }
 
-/** Fires whenever the index changes in any context (tab, options page, worker). */
-export function onIndexChanged(listener: (docs: DocMeta[]) => void): () => void {
+/**
+ * Fires whenever the document index or any timeline changes, in any context
+ * (an excalidraw.com tab, the options page, the service worker). Two tabs on
+ * excalidraw.com stay in step for free.
+ */
+export function onStoreChanged(listener: () => void): () => void {
   const handler = (
     changes: Record<string, chrome.storage.StorageChange>,
     area: string,
   ) => {
-    if (area !== 'local' || !(INDEX_KEY in changes)) return;
-    const next = (changes[INDEX_KEY]?.newValue as DocIndex | undefined) ?? {};
-    listener(Object.values(next).sort((a, b) => b.updatedAt - a.updatedAt));
+    if (area !== 'local') return;
+    if (INDEX_KEY in changes || SNAPSHOT_KEY in changes) listener();
   };
   chrome.storage.onChanged.addListener(handler);
   return () => chrome.storage.onChanged.removeListener(handler);

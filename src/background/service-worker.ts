@@ -1,61 +1,35 @@
 /**
- * The editor lives in a full tab, not the action popup -- popups cap out around
- * 800x600, which is unusable for a canvas.
+ * The extension has no page of its own -- the UI is a panel injected into
+ * excalidraw.com. All this does is route the toolbar click to the right tab.
  *
- * Phase 4 adds the sync queue and chrome.alarms tick here.
+ * Phase: Drive sync will add the sync queue and a chrome.alarms tick here.
  */
 
-const EDITOR_PATH = 'src/editor/index.html';
-const TAB_KEY = 'editorTabId';
+const EXCALIDRAW_ORIGIN = 'https://excalidraw.com';
 
-function editorUrl(): string {
-  return chrome.runtime.getURL(EDITOR_PATH);
-}
-
-/**
- * Remembers the editor tab so clicking the toolbar icon focuses it instead of
- * piling up duplicates, each holding its own unsaved state.
- *
- * The obvious implementation is chrome.tabs.query({ url }), but the url filter
- * requires the "tabs" permission, which prompts the user with "read your
- * browsing history" at install. Tracking the id ourselves needs no permission.
- */
-async function focusExistingEditor(): Promise<boolean> {
-  const { [TAB_KEY]: tabId } = await chrome.storage.session.get(TAB_KEY);
-  if (typeof tabId !== 'number') return false;
-
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    await chrome.tabs.update(tabId, { active: true });
-    if (tab.windowId !== undefined) {
-      await chrome.windows.update(tab.windowId, { focused: true });
+async function toggleOrOpen(tab: chrome.tabs.Tab): Promise<void> {
+  if (tab.id !== undefined && tab.url?.startsWith(EXCALIDRAW_ORIGIN)) {
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'toggle-panel' });
+      return;
+    } catch {
+      // The content script has not loaded yet -- most often because the tab was
+      // already open when the extension was installed or reloaded. Reloading
+      // injects it.
+      await chrome.tabs.reload(tab.id);
+      return;
     }
-    return true;
-  } catch {
-    // Tab was closed since we recorded it.
-    await chrome.storage.session.remove(TAB_KEY);
-    return false;
   }
+
+  // Clicked anywhere else: the extension only does anything on excalidraw.com,
+  // so take the user there rather than silently doing nothing.
+  await chrome.tabs.create({ url: `${EXCALIDRAW_ORIGIN}/` });
 }
 
-async function openEditor(): Promise<void> {
-  if (await focusExistingEditor()) return;
-  const tab = await chrome.tabs.create({ url: editorUrl() });
-  if (tab.id !== undefined) {
-    await chrome.storage.session.set({ [TAB_KEY]: tab.id });
-  }
-}
-
-chrome.action.onClicked.addListener(() => void openEditor());
+chrome.action.onClicked.addListener((tab) => void toggleOrOpen(tab));
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === chrome.runtime.OnInstalledReason.INSTALL) {
-    void openEditor();
+    void chrome.tabs.create({ url: `${EXCALIDRAW_ORIGIN}/` });
   }
-});
-
-chrome.tabs.onRemoved.addListener((tabId) => {
-  void chrome.storage.session.get(TAB_KEY).then(({ [TAB_KEY]: known }) => {
-    if (known === tabId) void chrome.storage.session.remove(TAB_KEY);
-  });
 });

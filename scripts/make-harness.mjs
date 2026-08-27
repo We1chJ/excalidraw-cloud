@@ -1,54 +1,67 @@
-// Builds dist/harness.html: the real editor bundle running in a plain page with
-// the chrome.* APIs stubbed out.
+// Builds dist/harness.html: the real content-script bundle running on a page
+// that impersonates excalidraw.com's storage layout.
 //
-// This exists because chrome://extensions cannot be driven by automation, so the
-// only way to smoke-test the built editor without a human in the loop is to load
-// the same JS over http. It verifies rendering, layout and font resolution.
-// It does NOT verify anything extension-specific -- that still needs a real
-// unpacked load.
-import { readFile, writeFile } from 'node:fs/promises';
+// A content script only runs inside a loaded extension, and chrome://extensions
+// cannot be driven by automation, so this is the only way to exercise the panel
+// without a human in the loop. It seeds the exact localStorage keys the bridge
+// reads, so bridge logic, document storage and history all come under test.
+//
+// It does NOT prove the script injects into the real excalidraw.com, nor that
+// the shadow root coexists with their UI. That still needs a real unpacked load.
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
-async function entryOf(page) {
-  const built = await readFile(path.join(root, `dist/src/${page}/index.html`), 'utf8');
-  const script = built.match(/<script type="module"[^>]*src="([^"]+)"/)?.[1];
-  const style = built.match(/<link rel="stylesheet"[^>]*href="([^"]+)"/)?.[1];
-  if (!script) throw new Error(`Could not find the ${page} entry script in the built HTML.`);
-  return { script, style };
+
+async function findAsset(prefix) {
+  const files = await readdir(path.join(root, 'dist/assets'));
+  // The loader shim crxjs emits shares the prefix; we want the real module.
+  const hit = files.find((f) => f.startsWith(prefix) && !f.includes('loader') && f.endsWith('.js'));
+  if (!hit) throw new Error(`No built asset starting with "${prefix}" in dist/assets.`);
+  return `/assets/${hit}`;
 }
 
+async function optionsEntry() {
+  const built = await readFile(path.join(root, 'dist/src/options/index.html'), 'utf8');
+  return {
+    script: built.match(/<script type="module"[^>]*src="([^"]+)"/)?.[1],
+    style: built.match(/<link rel="stylesheet"[^>]*href="([^"]+)"/)?.[1],
+  };
+}
+
+// Shaped exactly like excalidraw.com writes it: a bare element array.
+const el = (id, x, y, w, h, colour) => ({
+  id, type: 'rectangle', x, y, width: w, height: h, angle: 0,
+  strokeColor: colour, backgroundColor: 'transparent', fillStyle: 'solid',
+  strokeWidth: 2, strokeStyle: 'solid', roughness: 1, opacity: 100,
+  groupIds: [], frameId: null, roundness: { type: 3 }, seed: 1,
+  version: 12, versionNonce: 1, isDeleted: false, boundElements: null,
+  updated: 1, link: null, locked: false,
+});
+
+const SEED_ELEMENTS = [
+  el('seed-a', 100, 100, 180, 100, '#1971c2'),
+  el('seed-b', 320, 100, 180, 100, '#2f9e44'),
+  el('seed-c', 210, 250, 180, 100, '#e03131'),
+];
+
 const shim = `
-  // chrome.storage.local is persisted to localStorage so that reloading the
-  // harness exercises the same restore path the real extension takes.
-  const LS_KEY = '__harness_chrome_storage_local';
-  const load = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch { return {}; } };
-  const store = { local: load(), session: {} };
-  const persist = (name) => { if (name === 'local') localStorage.setItem(LS_KEY, JSON.stringify(store.local)); };
+  // ---- excalidraw.com's storage, impersonated -------------------------------
+  if (!localStorage.getItem('excalidraw')) {
+    localStorage.setItem('excalidraw', ${JSON.stringify(JSON.stringify(SEED_ELEMENTS))});
+    localStorage.setItem('excalidraw-state', JSON.stringify({
+      viewBackgroundColor: '#ffffff', theme: 'light', gridSize: 20,
+      scrollX: 0, scrollY: 0, zoom: { value: 1 },
+    }));
+  }
+
+  // ---- chrome.* -------------------------------------------------------------
+  const LS = '__harness_chrome_storage_local';
+  const load = () => { try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch { return {}; } };
+  const store = load();
   const listeners = [];
-  const area = (name) => ({
-    async get(keys) {
-      if (keys == null) return { ...store[name] };
-      const list = typeof keys === 'string' ? [keys] : Array.isArray(keys) ? keys : Object.keys(keys);
-      const out = {};
-      for (const k of list) if (k in store[name]) out[k] = store[name][k];
-      return out;
-    },
-    async set(items) {
-      const changes = {};
-      for (const [k, v] of Object.entries(items)) {
-        changes[k] = { oldValue: store[name][k], newValue: v };
-        store[name][k] = v;
-      }
-      persist(name);
-      listeners.forEach((fn) => fn(changes, name));
-    },
-    async remove(keys) {
-      for (const k of (typeof keys === 'string' ? [keys] : keys)) delete store[name][k];
-      persist(name);
-    },
-  });
+  const msgListeners = [];
 
   window.chrome = {
     runtime: {
@@ -56,48 +69,91 @@ const shim = `
       getURL: (p) => new URL('/' + String(p).replace(/^\\/+/, ''), location.origin).toString(),
       getManifest: () => ({ manifest_version: 3, name: 'Excalidraw Cloud (harness)', version: '0.0.0' }),
       openOptionsPage: () => window.open('/harness-options.html', '_blank'),
+      onMessage: {
+        addListener: (fn) => msgListeners.push(fn),
+        removeListener: (fn) => { const i = msgListeners.indexOf(fn); if (i >= 0) msgListeners.splice(i, 1); },
+      },
     },
     storage: {
-      local: area('local'),
-      session: area('session'),
+      local: {
+        async get(keys) {
+          if (keys == null) return { ...store };
+          const list = typeof keys === 'string' ? [keys] : Array.isArray(keys) ? keys : Object.keys(keys);
+          const out = {};
+          for (const k of list) if (k in store) out[k] = store[k];
+          return out;
+        },
+        async set(items) {
+          const changes = {};
+          for (const [k, v] of Object.entries(items)) { changes[k] = { oldValue: store[k], newValue: v }; store[k] = v; }
+          localStorage.setItem(LS, JSON.stringify(store));
+          listeners.forEach((fn) => fn(changes, 'local'));
+        },
+        async remove(keys) {
+          for (const k of (typeof keys === 'string' ? [keys] : keys)) delete store[k];
+          localStorage.setItem(LS, JSON.stringify(store));
+        },
+      },
       onChanged: {
         addListener: (fn) => listeners.push(fn),
-        removeListener: (fn) => {
-          const i = listeners.indexOf(fn);
-          if (i >= 0) listeners.splice(i, 1);
-        },
+        removeListener: (fn) => { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); },
       },
     },
   };
 
-  // Surface anything that breaks in a form read_console_messages can filter on.
+  // Stands in for the toolbar button.
+  window.__togglePanel = () => msgListeners.forEach((fn) => fn({ type: 'toggle-panel' }, {}, () => {}));
+
   window.addEventListener('error', (e) => console.error('[HARNESS] error:', e.message));
   window.addEventListener('unhandledrejection', (e) => console.error('[HARNESS] rejection:', e.reason?.message ?? e.reason));
 `;
 
-function page(title, entry) {
-  return `<!doctype html>
+const contentScript = await findAsset('main.tsx-');
+
+await writeFile(
+  path.join(root, 'dist/harness.html'),
+  `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>${title}</title>
+    <title>Excalidraw Cloud — content harness</title>
     <script>${shim}</script>
-${entry.style ? `    <link rel="stylesheet" crossorigin href="${entry.style}">` : ''}
-    <script type="module" crossorigin src="${entry.script}"></script>
+    <style>
+      body { margin: 0; font: 14px system-ui; background: #fafafa; color: #333; }
+      .fake { padding: 40px; max-width: 640px; }
+      code { background: #eee; padding: 2px 6px; border-radius: 4px; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div class="fake">
+      <h2>Stand-in for excalidraw.com</h2>
+      <p>Seeds the same <code>localStorage</code> keys excalidraw.com uses, so the
+         bridge reads a realistically shaped scene.</p>
+      <p>Toggle the panel with <code>window.__togglePanel()</code> or the tab on the right.</p>
+    </div>
+    <script type="module" src="${contentScript}"></script>
   </body>
 </html>
-`;
-}
+`,
+);
+console.log(`[make-harness] dist/harness.html -> ${contentScript}`);
 
-for (const [name, title, out] of [
-  ['editor', 'Excalidraw Cloud — harness', 'harness.html'],
-  ['options', 'Excalidraw Cloud — settings harness', 'harness-options.html'],
-]) {
-  const entry = await entryOf(name);
-  await writeFile(path.join(root, 'dist', out), page(title, entry));
-  console.log(`[make-harness] dist/${out} -> ${entry.script}`);
+const opts = await optionsEntry();
+if (opts.script) {
+  await writeFile(
+    path.join(root, 'dist/harness-options.html'),
+    `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Excalidraw Cloud — settings harness</title>
+    <script>${shim}</script>
+${opts.style ? `    <link rel="stylesheet" crossorigin href="${opts.style}">` : ''}
+    <script type="module" crossorigin src="${opts.script}"></script>
+  </head>
+  <body><div id="root"></div></body>
+</html>
+`,
+  );
+  console.log(`[make-harness] dist/harness-options.html -> ${opts.script}`);
 }

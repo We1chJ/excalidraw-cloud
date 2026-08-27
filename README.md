@@ -4,300 +4,194 @@
 
 # Excalidraw Cloud
 
-**Your Excalidraw drawings, in your own cloud, on every device.**
+**Saved drawings and version history, on the real excalidraw.com.**
 
-A Chrome extension that embeds the Excalidraw editor and keeps your drawings in
-your own storage. No backend, no accounts to manage, no server that can go away
-and take your work with it.
+A Chrome extension that adds a sidebar to excalidraw.com for keeping named
+drawings and their timelines — eventually in your own Google Drive. It does
+nothing on any other site, and it does not replace the editor.
 
 <br>
 
 <img alt="Chrome Extension" src="https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white">
-<img alt="Excalidraw" src="https://img.shields.io/badge/Excalidraw-0.18-6965DB?style=for-the-badge&logo=excalidraw&logoColor=white">
+<img alt="Excalidraw" src="https://img.shields.io/badge/excalidraw.com-content%20script-1B1B1F?style=for-the-badge&logo=excalidraw&logoColor=white">
 <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black">
 <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white">
-<img alt="Vite" src="https://img.shields.io/badge/Vite-6-646CFF?style=for-the-badge&logo=vite&logoColor=white">
 
 <br><br>
 
 <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
-<img alt="Status" src="https://img.shields.io/badge/status-phases%200--2%20complete-orange?style=flat-square">
-<img alt="Storage" src="https://img.shields.io/badge/storage-Google%20Drive-0F9D58?style=flat-square&logo=googledrive&logoColor=white">
-<img alt="Offline" src="https://img.shields.io/badge/offline-first-blueviolet?style=flat-square">
+<img alt="Bundle" src="https://img.shields.io/badge/bundle-248%20KB-informational?style=flat-square">
+<img alt="Storage" src="https://img.shields.io/badge/storage-local%20(Drive%20next)-orange?style=flat-square">
 
 </div>
 
 <br>
 
-> **Status: phases 0–2 complete.** The editor runs fully offline and persists
-> locally. Google Drive sync is next — the storage seam it plugs into is already
-> in place.
+> **Status:** the sidebar works against local storage. Google Drive sync is the
+> next phase — the adapter seam it plugs into is already in place.
 
 ---
 
-<div align="center">
+## What it does
 
-### How it works
+excalidraw.com holds exactly one canvas. Overwrite it and the previous drawing
+is gone. This extension adds the missing layer: **named drawings, each with a
+timeline of versions**, in a panel injected into the page.
 
-</div>
-
-You install the extension and click **Connect Google Drive**. Your drawings land
-in a folder in **your** Drive, under **your** quota, owned by **you** — openable
-and backupable without this extension ever running. There is no server in the
-middle, so nothing of yours ever touches a machine belonging to whoever built
-this.
-
-Files are saved as plain `.excalidraw` JSON. Drag one onto excalidraw.com and it
-opens. That is the guarantee against lock-in, and it is a hard requirement rather
-than a nice-to-have.
+- **Save canvas** — store what is on screen as a named drawing
+- **Save version** — add a point to that drawing's timeline
+- **Open / Restore** — put a drawing, or an earlier version of it, back on the canvas
+- Everything else about excalidraw.com is untouched
 
 ---
 
-## What works today
+## How it works, and what that costs
 
-- Toolbar icon opens the Excalidraw editor in a full tab
-- Drawings persist across reloads and browser restarts (IndexedDB)
-- Document sidebar: create, rename, switch, delete
-- Fonts render with the network disconnected — nothing is fetched at runtime
-- Embedded images survive the save/reload round trip
+The extension does not bundle an editor. It reads and writes excalidraw.com's
+own storage from a content script:
 
-## What doesn't yet
+| What | Where |
+|---|---|
+| Elements | `localStorage["excalidraw"]` — a bare array |
+| App state | `localStorage["excalidraw-state"]` |
+| Images | IndexedDB `files-db` → `files-store` |
 
-- Cloud sync. `LocalOnlyAdapter` is wired up; `GoogleDriveAdapter` is phase 3.
-- The sync indicator always reads "Saved on this device", which is accurate.
+**These are not a public API.** Excalidraw can rename them in any deploy, and
+this extension is what breaks. That is the price of augmenting the real site
+rather than shipping a copy of the editor.
+
+The mitigation is `checkHealth()` in `src/excalidraw/bridge.ts`, which runs
+before the panel does anything. If the shape it expects is gone, the panel
+disables saving and loading and says so, rather than silently corrupting
+drawings. All the fragile knowledge is quarantined in that one file.
+
+### Loading a drawing reloads the page
+
+There is no way around this. A running excalidraw.com never re-reads
+`localStorage`, and it **ignores synthetic drop events** — verified on
+2026-08-27 by dispatching a `DragEvent` carrying a `.excalidraw` `File`, which
+changed nothing. Writing storage and reloading is the only mechanism that works,
+so the panel always warns before replacing a non-empty canvas.
 
 ---
 
-## Development setup
-
-Requires Node 20.19+ or 22.12+ for Vite 7/8. This repo pins **Vite 6**, which
-runs on Node 18/20/22, so Node 20.17 works as-is.
+## Development
 
 ```bash
-npm install          # also copies Excalidraw's fonts into public/
-npm run build        # typechecks, then bundles to dist/
-npm run check:remote # verifies no remote code slipped into the bundle
+npm install
+npm run build          # typecheck, then bundle to dist/
+npm run check:remote   # no remote code or eval in the bundle
+npm run harness        # build the offline test harness (below)
 ```
 
-Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load
-unpacked** → select the `dist/` folder.
+Then `chrome://extensions` → **Developer mode** → **Load unpacked** → `dist/`.
+Open excalidraw.com and click the toolbar icon to toggle the panel.
 
-For live reload during development, `npm run dev` and load `dist/` the same way.
+If the panel does not appear on a tab that was already open, reload the tab —
+content scripts are only injected into pages loaded after the extension.
 
 ### The extension ID is pinned
 
-An unpacked extension's ID is normally derived from its folder path, so moving
-the folder changes the ID and breaks the OAuth client binding. `manifest.config.ts`
-carries a public key that pins it to:
-
-```
-ceblkplfjlpkgmioaohkodeibecamilh
-```
-
-`key.pem` (the private half) is gitignored. Regenerate both if you're forking:
-
-```bash
-openssl genrsa -out key.pem 2048
-openssl rsa -in key.pem -pubout -outform DER | openssl base64 -A
-```
-
-Paste the output into the `KEY` constant in `manifest.config.ts`.
+`manifest.config.ts` carries a public key that pins the ID to
+`ceblkplfjlpkgmioaohkodeibecamilh` on any machine, so the OAuth client binding
+survives moving the folder. `key.pem` (the private half) is gitignored;
+regenerate with `openssl genrsa -out key.pem 2048` and
+`openssl rsa -in key.pem -pubout -outform DER | openssl base64 -A`.
 
 ---
 
-## Architecture
-
-<div align="center">
-
-```
-editor tab
-  └─ <Excalidraw /> ── onChange (debounced 800ms)
-                          │
-                          ▼
-                 IndexedDB (working copy)      ← always succeeds, offline-safe
-                          │
-                          ▼
-                    StorageAdapter             ← the swappable seam
-                          │
-                          ▼
-                   Google Drive (phase 3)
-```
-
-</div>
-
-IndexedDB is the working copy and is never allowed to fail. Cloud storage is
-durable backup reached through `StorageAdapter`. Everything above that interface
-is the editor and document manager; everything below is replaceable — an S3,
-Dropbox or WebDAV adapter drops in without touching core.
+## Layout
 
 | Path | Role |
 |---|---|
-| `src/storage/types.ts` | `StorageAdapter`, `DocMeta`, `SceneData` |
-| `src/storage/documents.ts` | Document operations the UI calls |
-| `src/storage/db.ts` | IndexedDB (scene bodies, with embedded images) |
-| `src/storage/meta.ts` | `chrome.storage.local` (document index) |
+| `src/excalidraw/bridge.ts` | **All** knowledge of excalidraw.com's internals, plus the health check |
+| `src/content/main.tsx` | Injects the panel into a shadow root |
+| `src/content/Panel.tsx` | The sidebar: drawings, timelines, confirmations |
+| `src/storage/documents.ts` | Document and snapshot operations |
+| `src/storage/db.ts` | IndexedDB: scene bodies and snapshot bodies |
+| `src/storage/meta.ts` | `chrome.storage.local`: document and snapshot indexes |
 | `src/storage/adapters/` | `local.ts` today, `googleDrive.ts` next |
-| `src/editor/` | Editor tab: sidebar + canvas + sync indicator |
-| `src/background/service-worker.ts` | Opens/focuses the editor tab |
+| `src/background/service-worker.ts` | Routes the toolbar click to the right tab |
 
-### Why the index and the scenes live in different stores
+The panel renders inside a **shadow root**. excalidraw.com ships a large global
+stylesheet and so do we; without that boundary the first symptom would be their
+canvas UI subtly breaking, which is what makes an extension feel like malware.
 
-The document index sits in `chrome.storage.local` so the service worker and
-options page can read it without opening a database, and so every surface gets
-change events for free. Scene bodies sit in IndexedDB because they carry
-embedded image bytes and get large.
+Bodies live in IndexedDB, indexes in `chrome.storage.local` — so the service
+worker and options page can read the list without opening a database, and every
+surface gets change events for free.
 
 ---
 
 ## Things that are easy to get wrong
 
-**Serialize with `'local'`, not `'database'`.** `serializeAsJSON` only emits the
-`files` map for `'local'`:
+**`files` must be populated when serialising.** The library's `serializeAsJSON`
+emits the `files` map only for the `'local'` variant; `'database'` sets it to
+`undefined` and silently drops every embedded image. `toExcalidrawFile()` builds
+the payload by hand and always includes it.
 
-```js
-files: type === "local" ? filterUsedFiles(elements, files) : undefined
-```
+**Excalidraw is a devDependency, types only.** Importing it at runtime would
+pull the entire editor into a content script that runs on every excalidraw.com
+page load. `sceneVersionOf()` replaces `getSceneVersion()` in a few lines.
 
-Using `'database'` silently drops every embedded image. `'local'` is also what
-excalidraw.com's own export uses, which is what keeps saved files openable there.
+**Restoring must not clobber user preferences.** `writeScene()` merges rather
+than overwrites app state, and deliberately keeps the *current* scroll and zoom
+— restoring a stale viewport strands the user on empty canvas away from their
+own drawing.
 
-**Always `restore()` on the way in.** It migrates older schemas, repairs element
-bindings, and rebuilds fields the editor expects as live objects rather than
-plain JSON. Skipping it produces subtle breakage — `collaborators` arriving as a
-plain object instead of a `Map` is the classic one.
-
-**`EXCALIDRAW_ASSET_PATH` points at the parent of `fonts/`.** Excalidraw resolves
-`./fonts/Excalifont/...` against it, so fonts must land at
-`public/excalidraw-assets/fonts/` and the path is
-`chrome.runtime.getURL('excalidraw-assets/')`. It's set in `src/editor/assets.ts`,
-imported before anything touches Excalidraw — MV3's CSP forbids the inline
-`<script>` the upstream docs suggest.
-
-**Compare scene versions before writing.** `onChange` fires on every pointer move
-during a drag, and also for pans, zooms and selection changes that alter nothing
-persistent. `saveScene` compares `getSceneVersion()` and returns early.
-
-**The container needs a real height.** Excalidraw fills 100% of its containing
-block, so a parent without an explicit height collapses the canvas to nothing.
+**Snapshots are capped.** `MAX_SNAPSHOTS = 30` per drawing, oldest pruned with
+their bodies. An unbounded timeline of whole scenes including images is how you
+fill somebody's Drive quota without telling them.
 
 ---
 
-## MV3 remote-code compliance
+## Testing without loading the extension
 
-`npm run check:remote` scans `dist/` for URLs reaching code-loading sinks
-(`import()`, `importScripts`, `new Worker`, `script.src`) and for
-`eval`/`new Function`. It deliberately ignores URLs that are merely present as
-strings — bundled libraries are full of license headers and error-doc links, and
-flagging those trains you to ignore the check.
-
-Two findings are known and handled:
-
-**Embeddable elements** pull in `platform.twitter.com/widgets.js` and
-`embed.reddit.com/widgets.js`. That is remotely hosted code, which MV3 forbids.
-The editor passes `validateEmbeddable={false}`, so no embed can ever be created
-and the path stays dead.
-
-**`new Function` in `subset-shared.chunk`** is Emscripten glue for the harfbuzz
-WASM used in font subsetting. MV3's CSP has no escape hatch for it —
-`unsafe-eval` is not permitted in extension pages. It is not on the drawing or
-saving path; it is reached during font-embedding export. Verify what actually
-breaks there before relying on SVG export.
-
-## Smoke-testing without loading the extension
-
-`chrome://extensions` cannot be driven by automation, which makes the built
-editor awkward to test in a loop. `npm run harness` writes `dist/harness.html` —
-the real editor bundle running in a plain page with `chrome.*` stubbed
-(`chrome.storage.local` is backed by `localStorage` so reloads exercise the real
-restore path).
+A content script only runs inside a loaded extension, and `chrome://extensions`
+cannot be automated. `npm run harness` writes `dist/harness.html`: the real
+content bundle on a page that seeds the exact `localStorage` keys excalidraw.com
+uses, with `chrome.*` stubbed.
 
 ```bash
-npm run build
-npm run harness
-cd dist && npx http-server -p 8137 -c-1
-# open http://127.0.0.1:8137/harness.html
+npm run build && npm run harness
+cd dist && npx http-server -p 8141 -c-1
+# open http://127.0.0.1:8141/harness.html
 ```
 
-This verifies rendering, layout, font resolution and the whole local persistence
-path. It does **not** verify anything extension-specific — the service worker,
-the real `chrome.storage`, or the manifest. Those still need a real unpacked
-load. Delete `dist/harness.html` before packaging for the Web Store.
+Verified through it: panel injects into a shadow root, health check passes on a
+well-formed scene, save creates a document and first snapshot, editing then
+saving adds a second version, saving an unchanged canvas is refused rather than
+duplicated, restoring an older version swaps the canvas while preserving
+viewport and theme, and corrupting the storage format disables exactly the
+destructive actions.
 
-### What this has been used to verify
-
-- Excalidraw renders, and the canvas gets a real height
-- Text renders in Excalifont from bundled fonts, with **no request to `esm.sh`**
-- Draw → reload → drawing restored, with `sceneVersion` recorded in the index
-- Drop an image → reload → the image element **and** its `files` entry survive,
-  which is the case `'database'` serialization would have silently destroyed
-- Create, switch, rename across two documents, each keeping its own scene
-- No console errors through any of the above
-
-## Offline verification
-
-The one test that matters for phase 1, and it has to be done for real:
-
-1. Build and load the extension.
-2. Disconnect from the network entirely — not DevTools throttling, actually off.
-3. Reload the extension and open the editor.
-4. Type some text. It should render in Excalidraw's hand-drawn face (Excalifont),
-   not a system fallback.
-5. Open DevTools → Network. There should be no font requests to `esm.sh`.
-
-Excalidraw appends `https://esm.sh/@excalidraw/excalidraw@<version>/dist/prod/`
-as the *last* font candidate, after the local path. It never fires when the
-bundled fonts resolve — this test is what proves they do.
+It does **not** prove injection into the real excalidraw.com, or that the shadow
+root coexists with their UI. That needs a real unpacked load.
 
 ---
 
 ## The mark
 
-`npm run icons` regenerates every icon and the README logo from
+`npm run icons` regenerates every icon and this logo from
 `scripts/make-icons.mjs` — signed distance fields rasterised straight to PNG
-with no image dependencies, so one source renders cleanly from 16px to 512px.
+with no image dependencies, one source from 16px to 512px.
 
-It borrows Excalidraw's *visual language* — the wobbly hand-drawn line quality —
-but is deliberately **not** derived from Excalidraw's logo. Their MIT licence
-covers code, not their trademark, and a modified version of their mark on a
-separate Web Store listing would read as an official Excalidraw product.
+Black pen on white paper, `#1B1B1F`. Every stroke is drawn twice with different
+wobble seeds so the passes diverge and cross, which is what roughjs does and so
+what makes it read as drawn rather than as a decorative font. Below 24px it
+switches to a solid silhouette: an outline thick enough to see at that size also
+closes up the cloud's interior.
 
-It is black pen on white paper — `#1B1B1F`, Excalidraw's own default stroke
-colour, on flat white. No tint and no gradient anywhere.
-
-Every stroke is drawn **twice**, with different wobble seeds, so the two passes
-diverge and cross the way a pen does when you sketch a shape without lifting it.
-That double pass is the most recognisable thing about roughjs, and so about how
-Excalidraw looks: one clean wobbly line reads as a decorative font, two
-overlapping ones read as drawn. It only works if the pen is thin enough for a
-gap to open between the passes — at the earlier `0.040` weight they overlapped
-completely and looked like a single lumpy line.
-
-Small sizes get different artwork. At 16px an outline thick enough to be visible
-is also thick enough to close up the cloud's interior, and the mark reads as a
-spiral; below 24px it renders as a solid silhouette instead.
-
-The paper is white rather than transparent because a transparent black mark
-disappears on a dark browser toolbar. The trade-off is that the README logo is a
-white card on GitHub's dark theme; if that bothers you, generate an inverted
-variant and select it with `<picture>` and `prefers-color-scheme`.
-
-## Bundle size
-
-`dist/` is roughly 22 MB, dominated by two things:
-
-- `Xiaolai` (13 MB) — the CJK font. Dropping it shrinks the package by more than
-  half but breaks offline rendering of Chinese, Japanese and Korean text.
-- Mermaid diagram support, which Excalidraw bundles for its text-to-diagram feature.
-
-Both are well under the Chrome Web Store's limit. Trim only if you have a reason.
+It borrows Excalidraw's visual language but is deliberately **not** derived from
+their logo — their MIT licence covers code, not their trademark.
 
 ---
 
 ## License
 
-MIT. Excalidraw is MIT-licensed; its copyright notice is retained in `NOTICE`.
+MIT. See `NOTICE` for Excalidraw's copyright, retained for the type definitions.
 
 <div align="center">
 <br>
-<sub>Built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a> — your drawings, your Drive, your call.</sub>
+<sub>Built for <a href="https://excalidraw.com">Excalidraw</a> — your drawings, your Drive, your call.</sub>
 </div>

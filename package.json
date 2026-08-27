@@ -3,26 +3,24 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Chrome extension that embeds the Excalidraw editor and syncs drawings to your own Google Drive.",
+  "description": "Chrome extension that adds a Drive-backed drawings sidebar to excalidraw.com.",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "copy-assets": "node scripts/copy-excalidraw-assets.mjs",
-    "postinstall": "node scripts/copy-excalidraw-assets.mjs",
     "check:remote": "node scripts/check-no-remote-code.mjs",
     "icons": "node scripts/make-icons.mjs",
     "harness": "node scripts/make-harness.mjs"
   },
   "dependencies": {
-    "@excalidraw/excalidraw": "0.18.1",
     "idb": "^8.0.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.1",
+    "@excalidraw/excalidraw": "0.18.1",
     "@types/chrome": "^0.1.28",
     "@types/node": "^22.20.1",
     "@types/react": "^19.1.10",
