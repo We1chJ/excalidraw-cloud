@@ -27,8 +27,8 @@ nothing on any other site, and it does not replace the editor.
 
 <br>
 
-> **Status:** the sidebar works against local storage. Google Drive sync is the
-> next phase — the adapter seam it plugs into is already in place.
+> **Status:** sidebar and Google Drive sync are built. Drive stays inert until
+> you add an OAuth client ID — see [docs/google-cloud-setup.md](docs/google-cloud-setup.md).
 
 ---
 
@@ -42,6 +42,7 @@ timeline of versions**, in a panel injected into the page.
 - **Save version** — add a point to that drawing's timeline
 - **Preview** — hover a drawing or a version to peek at it, click to pin the card
 - **Open / Restore** — put a drawing, or an earlier version of it, back on the canvas
+- **Sync** — each drawing is one `.excalidraw` file in an `Excalidraw` folder in your own Drive
 - Everything else about excalidraw.com is untouched
 
 ---
@@ -112,7 +113,11 @@ regenerate with `openssl genrsa -out key.pem 2048` and
 | `src/storage/db.ts` | IndexedDB: scene bodies and snapshot bodies |
 | `src/storage/meta.ts` | `chrome.storage.local`: document and snapshot indexes |
 | `src/storage/adapters/` | `local.ts` today, `googleDrive.ts` next |
-| `src/background/service-worker.ts` | Routes the toolbar click to the right tab |
+| `src/background/service-worker.ts` | Toolbar click, plus the message router |
+| `src/background/storage-host.ts` | Owns the IndexedDB holding scene and snapshot bodies |
+| `src/background/sync.ts` | Push-on-save, conflict policy, sync state |
+| `src/lib/auth.ts` | `chrome.identity` wrapper with the single 401 retry |
+| `src/storage/adapters/googleDrive.ts` | Drive REST: folder, multipart upload, trash |
 
 The panel renders inside a **shadow root**. excalidraw.com ships a large global
 stylesheet and so do we; without that boundary the first symptom would be their
@@ -121,6 +126,22 @@ canvas UI subtly breaking, which is what makes an extension feel like malware.
 Bodies live in IndexedDB, indexes in `chrome.storage.local` — so the service
 worker and options page can read the list without opening a database, and every
 surface gets change events for free.
+
+### Why the worker owns storage and networking
+
+A content script shares the **page's** IndexedDB, not the extension's. Storing
+scene bodies from excalidraw.com would put your drawings under excalidraw.com's
+origin: deleted when you clear that site's data, outside the reach of the
+`unlimitedStorage` permission (which is extension-scoped), and unreadable by the
+service worker that has to upload them.
+
+MV3 also subjects content-script `fetch` to the page's CORS, so calls to
+googleapis.com have to originate from the worker, and `chrome.identity` is not
+exposed to content scripts at all.
+
+So the worker owns the database and everything touching Drive; the panel talks
+to it over `chrome.runtime` messages. `src/storage/db.ts` and
+`src/storage/sync.ts` are the clients.
 
 ---
 
@@ -154,6 +175,44 @@ fill somebody's Drive quota without telling them.
 
 ---
 
+## Google Drive sync
+
+Each drawing becomes one `.excalidraw` file in an `Excalidraw` folder in your
+Drive. Those files open on excalidraw.com directly — that is the guarantee
+against lock-in.
+
+**Snapshots are not uploaded.** Version history stays on the device that made
+it. Uploading up to 30 whole scenes per drawing, each carrying embedded images,
+is how you quietly consume somebody's Drive quota.
+
+The scope is `drive.file`, so the extension can only ever see files it created
+— never the rest of your Drive. That also keeps it a non-sensitive scope, which
+is what avoids Google's verification review.
+
+Sync is push-on-save. There is no debounce queue because saves here are explicit
+user actions, not an autosave firing on every pointer move, so there is nothing
+to coalesce. Conflicts are last-write-wins, which is adequate for one person
+across their own devices.
+
+Deleting a drawing **trashes** the Drive file rather than hard-deleting it, so a
+sync bug is recoverable from your own Drive bin. Quota errors (403) surface
+loudly instead of retrying — silent sync failure is the main risk in a design
+where you believe your work is backed up.
+
+To enable it, follow [docs/google-cloud-setup.md](docs/google-cloud-setup.md),
+then:
+
+```bash
+cp .env.example .env      # add VITE_GOOGLE_CLIENT_ID=...
+npm run build
+```
+
+The manifest only declares `identity`, the googleapis host permission and the
+`oauth2` block when that value is present, so a local-only build never asks for
+permissions it cannot use.
+
+---
+
 ## Testing without loading the extension
 
 A content script only runs inside a loaded extension, and `chrome://extensions`
@@ -166,6 +225,10 @@ npm run build && npm run harness
 cd dist && npx http-server -p 8141 -c-1
 # open http://127.0.0.1:8141/harness.html
 ```
+
+The harness includes a fake service worker answering the same message protocol,
+and `?drive=configured` / `?drive=connected` exercise the panel's other sync
+states without needing a real Cloud project.
 
 Verified through it: panel injects into a shadow root, health check passes on a
 well-formed scene, save creates a document and first snapshot, editing then

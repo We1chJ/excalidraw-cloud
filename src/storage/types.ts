@@ -75,8 +75,10 @@ export interface StorageAdapter {
 
   list(): Promise<RemoteFile[]>;
   load(remoteId: string): Promise<SceneData>;
-  create(title: string, scene: SceneData): Promise<{ remoteId: string; modifiedAt: number }>;
-  update(remoteId: string, scene: SceneData): Promise<{ modifiedAt: number }>;
+  /** `body` is a serialised .excalidraw document; adapters are transport, not serialisation. */
+  create(title: string, body: string): Promise<{ remoteId: string; modifiedAt: number }>;
+  update(remoteId: string, body: string): Promise<{ modifiedAt: number }>;
+  rename(remoteId: string, title: string): Promise<void>;
   remove(remoteId: string): Promise<void>;
 }
 

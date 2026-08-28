@@ -18,8 +18,16 @@ import {
   renameDoc,
   saveDoc,
 } from '../storage/documents';
+import * as sync from '../storage/sync';
 import type { DocMeta, SceneData, Snapshot } from '../storage/types';
 import { ScenePreview } from './ScenePreview';
+
+const SYNC_LABEL: Record<DocMeta['syncState'], string> = {
+  local: 'not synced',
+  syncing: 'syncing…',
+  synced: 'synced',
+  error: 'sync failed',
+};
 
 /** Long enough that sweeping the cursor down the list loads nothing. */
 const HOVER_DELAY_MS = 180;
@@ -61,6 +69,8 @@ export function Panel() {
   const [draft, setDraft] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [cloud, setCloud] = useState<sync.SyncStatus | null>(null);
+  const [connecting, setConnecting] = useState(false);
 
   // Scenes carry embedded images, so re-reading IndexedDB on every hover would
   // be wasteful. Cleared whenever the store changes so previews cannot go stale.
@@ -75,6 +85,7 @@ export function Panel() {
   useEffect(() => {
     setHealth(checkHealth());
     void refresh();
+    void sync.status().then(setCloud).catch(() => setCloud(null));
     return onStoreChanged(() => void refresh());
   }, [refresh]);
 
@@ -201,6 +212,25 @@ export function Panel() {
     }
   };
 
+  const connectDrive = async () => {
+    setConnecting(true);
+    try {
+      await sync.connect();
+      setCloud(await sync.status());
+      // Anything saved before connecting has never been uploaded.
+      const { pushed, failed } = await sync.pushAll();
+      flash(
+        failed
+          ? `Connected. Uploaded ${pushed}, ${failed} failed — see the drawing list.`
+          : `Connected to Google Drive. Uploaded ${pushed} drawing${pushed === 1 ? '' : 's'}.`,
+      );
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConnecting(false);
+    }
+  };
+
   const commitRename = async () => {
     if (renaming) {
       await renameDoc(renaming, draft);
@@ -324,6 +354,14 @@ export function Panel() {
                         <span className="name">{doc.title}</span>
                         <span className="meta">
                           {doc.elementCount} items · {relativeTime(doc.updatedAt)}
+                          {cloud?.connected && (
+                            <span
+                              className={`chip chip-${doc.syncState}`}
+                              title={doc.syncError ?? undefined}
+                            >
+                              {SYNC_LABEL[doc.syncState]}
+                            </span>
+                          )}
                         </span>
                       </button>
                     )}
@@ -417,7 +455,17 @@ export function Panel() {
           <button className="link" onClick={() => chrome.runtime.openOptionsPage()}>
             Settings
           </button>
-          <span className="dim">Saved on this device</span>
+          {cloud?.connected ? (
+            <span className="dim">Syncing to {cloud.label}</span>
+          ) : cloud?.configured ? (
+            <button className="link" onClick={() => void connectDrive()} disabled={connecting}>
+              {connecting ? 'Connecting…' : 'Connect Google Drive'}
+            </button>
+          ) : (
+            <span className="dim" title="Add VITE_GOOGLE_CLIENT_ID to .env and rebuild">
+              Saved on this device
+            </span>
+          )}
         </footer>
       </aside>
     </>

@@ -1,5 +1,17 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { SceneData } from './types';
+
+/**
+ * Client for the IndexedDB the service worker owns.
+ *
+ * The bodies deliberately do not live here. A content script shares the PAGE's
+ * IndexedDB, so keeping them locally would store the user's drawings under
+ * excalidraw.com's origin -- wiped by clearing that site's data, outside the
+ * reach of the extension-scoped "unlimitedStorage" permission, and invisible to
+ * the service worker that has to upload them. See src/background/storage-host.ts.
+ *
+ * Every call is a message round trip, which is why the panel caches scenes for
+ * previews rather than re-reading per hover.
+ */
 
 interface StoredSnapshot {
   id: string;
@@ -8,74 +20,29 @@ interface StoredSnapshot {
   scene: SceneData;
 }
 
-interface ExcalidrawCloudDB extends DBSchema {
-  /** Current state of each document, keyed by DocMeta.id. */
-  scenes: {
-    key: string;
-    value: SceneData;
-  };
-  /** Timeline entries. Bodies live here; the index in chrome.storage stays small. */
-  snapshots: {
-    key: string;
-    value: StoredSnapshot;
-    indexes: { byDoc: string };
-  };
+async function call<T>(op: string, args: unknown[] = []): Promise<T> {
+  const reply = (await chrome.runtime.sendMessage({ kind: 'db', op, args })) as
+    | { ok: true; value: T }
+    | { ok: false; error: string }
+    | undefined;
+
+  if (!reply) {
+    // The worker was asleep and failed to wake, or the extension was reloaded
+    // out from under this page.
+    throw new Error('Lost contact with the extension. Reload the page and try again.');
+  }
+  if (!reply.ok) throw new Error(reply.error);
+  return reply.value;
 }
 
-const DB_NAME = 'excalidraw-cloud';
-const DB_VERSION = 2;
+export const readScene = (id: string) => call<SceneData | undefined>('readScene', [id]);
+export const writeScene = (id: string, scene: SceneData) => call<void>('writeScene', [id, scene]);
+export const deleteScene = (id: string) => call<void>('deleteScene', [id]);
 
-let dbPromise: Promise<IDBPDatabase<ExcalidrawCloudDB>> | undefined;
+export const putSnapshot = (entry: StoredSnapshot) => call<void>('putSnapshot', [entry]);
+export const readSnapshot = (id: string) => call<StoredSnapshot | undefined>('readSnapshot', [id]);
+export const deleteSnapshot = (id: string) => call<void>('deleteSnapshot', [id]);
+export const deleteSnapshotsForDoc = (docId: string) =>
+  call<void>('deleteSnapshotsForDoc', [docId]);
 
-function db() {
-  dbPromise ??= openDB<ExcalidrawCloudDB>(DB_NAME, DB_VERSION, {
-    upgrade(database, oldVersion) {
-      if (oldVersion < 1 && !database.objectStoreNames.contains('scenes')) {
-        database.createObjectStore('scenes');
-      }
-      if (oldVersion < 2 && !database.objectStoreNames.contains('snapshots')) {
-        const store = database.createObjectStore('snapshots', { keyPath: 'id' });
-        store.createIndex('byDoc', 'docId');
-      }
-    },
-  });
-  return dbPromise;
-}
-
-export async function readScene(id: string): Promise<SceneData | undefined> {
-  return (await db()).get('scenes', id);
-}
-
-export async function writeScene(id: string, scene: SceneData): Promise<void> {
-  await (await db()).put('scenes', scene, id);
-}
-
-export async function deleteScene(id: string): Promise<void> {
-  await (await db()).delete('scenes', id);
-}
-
-export async function putSnapshot(entry: StoredSnapshot): Promise<void> {
-  await (await db()).put('snapshots', entry);
-}
-
-export async function readSnapshot(id: string): Promise<StoredSnapshot | undefined> {
-  return (await db()).get('snapshots', id);
-}
-
-export async function deleteSnapshot(id: string): Promise<void> {
-  await (await db()).delete('snapshots', id);
-}
-
-/** Removes every snapshot belonging to a document. Used when deleting it. */
-export async function deleteSnapshotsForDoc(docId: string): Promise<void> {
-  const database = await db();
-  const tx = database.transaction('snapshots', 'readwrite');
-  const keys = await tx.store.index('byDoc').getAllKeys(docId);
-  await Promise.all(keys.map((key) => tx.store.delete(key)));
-  await tx.done;
-}
-
-export async function estimateUsage(): Promise<number | null> {
-  const estimate = await navigator.storage?.estimate?.();
-  return estimate?.usage ?? null;
-}
+export const estimateUsage = () => call<number | null>('estimateUsage');

@@ -31,6 +31,10 @@ export class LocalOnlyAdapter implements StorageAdapter {
     throw new Error('Local-only storage has no remote copy to load.');
   }
 
+  async rename(): Promise<void> {
+    // Nothing remote to rename.
+  }
+
   async create(): Promise<{ remoteId: string; modifiedAt: number }> {
     throw new Error('Connect a cloud backend to sync drawings off this device.');
   }

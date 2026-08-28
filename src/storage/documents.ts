@@ -1,6 +1,7 @@
 import * as db from './db';
 import * as meta from './meta';
 import { sceneVersionOf } from '../excalidraw/bridge';
+import * as sync from './sync';
 import type { DocMeta, ExcalidrawFile, SceneData, Snapshot } from './types';
 
 /**
@@ -82,6 +83,7 @@ export async function createDoc(title: string, scene: SceneData): Promise<DocMet
   await db.writeScene(doc.id, scene);
   await meta.putDoc(doc);
   await takeSnapshot(doc.id, scene, now);
+  sync.pushInBackground(doc.id);
   return doc;
 }
 
@@ -115,6 +117,7 @@ export async function saveDoc(id: string, scene: SceneData): Promise<SaveResult>
     syncState: 'local',
   });
   await takeSnapshot(id, scene, now);
+  sync.pushInBackground(id);
   return { saved: true, meta: updated };
 }
 
@@ -153,10 +156,15 @@ export async function loadSnapshot(snapshotId: string): Promise<SceneData> {
 }
 
 export async function renameDoc(id: string, title: string): Promise<void> {
-  await meta.patchDoc(id, { title: title.trim() || UNTITLED });
+  const next = title.trim() || UNTITLED;
+  await meta.patchDoc(id, { title: next });
+  void sync.renameRemote(id, next).catch(() => {});
 }
 
 export async function deleteDoc(id: string): Promise<void> {
+  // Trash the Drive copy before dropping local state -- afterwards the remoteId
+  // is gone and the file would be orphaned in the user's Drive forever.
+  await sync.removeRemote(id).catch(() => {});
   await db.deleteScene(id);
   await db.deleteSnapshotsForDoc(id);
   await meta.dropSnapshots(id);

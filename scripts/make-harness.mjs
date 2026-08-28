@@ -101,6 +101,74 @@ const shim = `
     },
   };
 
+  // ---- fake service worker --------------------------------------------------
+  // Scene bodies now live in the worker's IndexedDB, reached over messages, so
+  // the harness has to answer those messages or nothing loads at all.
+  const idb = () => new Promise((res, rej) => {
+    const r = indexedDB.open('excalidraw-cloud-harness', 2);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains('scenes')) db.createObjectStore('scenes');
+      if (!db.objectStoreNames.contains('snapshots')) {
+        db.createObjectStore('snapshots', { keyPath: 'id' }).createIndex('byDoc', 'docId');
+      }
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  const tx = async (store, mode, fn) => {
+    const db = await idb();
+    return new Promise((res, rej) => {
+      const req = fn(db.transaction(store, mode).objectStore(store));
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  };
+
+  const dbOps = {
+    readScene: (id) => tx('scenes', 'readonly', (s) => s.get(id)),
+    writeScene: (id, scene) => tx('scenes', 'readwrite', (s) => s.put(scene, id)).then(() => undefined),
+    deleteScene: (id) => tx('scenes', 'readwrite', (s) => s.delete(id)).then(() => undefined),
+    putSnapshot: (entry) => tx('snapshots', 'readwrite', (s) => s.put(entry)).then(() => undefined),
+    readSnapshot: (id) => tx('snapshots', 'readonly', (s) => s.get(id)),
+    deleteSnapshot: (id) => tx('snapshots', 'readwrite', (s) => s.delete(id)).then(() => undefined),
+    async deleteSnapshotsForDoc(docId) {
+      const all = await tx('snapshots', 'readonly', (s) => s.getAll());
+      for (const e of all.filter((e) => e.docId === docId)) await dbOps.deleteSnapshot(e.id);
+    },
+    estimateUsage: async () => (await navigator.storage?.estimate?.())?.usage ?? null,
+  };
+
+  // Drive is genuinely unavailable in the harness: chrome.identity does not
+  // exist outside a real extension. The panel should degrade, not crash.
+  // ?drive=configured / ?drive=connected exercise the panel's other two states
+  // without needing a real Cloud project.
+  const driveMode = new URLSearchParams(location.search).get('drive') || 'off';
+  const syncOps = {
+    status: async () => ({
+      configured: driveMode !== 'off',
+      connected: driveMode === 'connected',
+      label: 'Google Drive',
+    }),
+    connect: async () => { throw new Error('Google Drive needs a real extension build.'); },
+    disconnect: async () => undefined,
+    push: async () => ({ synced: false, error: 'Not connected to Google Drive.' }),
+    pushAll: async () => ({ pushed: 0, failed: 0 }),
+    renameRemote: async () => undefined,
+    removeRemote: async () => undefined,
+    listRemoteOnly: async () => [],
+    pull: async () => { throw new Error('Not connected.'); },
+  };
+
+  window.chrome.runtime.sendMessage = async (msg) => {
+    const table = msg && msg.kind === 'db' ? dbOps : msg && msg.kind === 'sync' ? syncOps : null;
+    if (!table) return undefined;
+    const fn = table[msg.op];
+    if (!fn) return { ok: false, error: 'Unknown operation ' + msg.op };
+    try { return { ok: true, value: await fn(...(msg.args || [])) }; }
+    catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+  };
+
   // Stands in for the toolbar button.
   window.__togglePanel = () => msgListeners.forEach((fn) => fn({ type: 'toggle-panel' }, {}, () => {}));
 
